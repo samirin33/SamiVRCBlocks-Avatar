@@ -1,0 +1,25 @@
+{
+  "name": "com.github.samirin33.samivrcblocks-avatar",
+  "displayName": "SamiVRCBlocks-Avatar",
+  "version": "0.4.0",
+  "unity": "2022.3",
+  "description": "SamiVRCBlocks-Avatar: NDMF/Modular Avatar based build-time components for VRChat Avatar 3.0.",
+  "author": {
+    "name": "samirin33",
+    "url": "https://github.com/samirin33"
+  },
+  "url": "https://github.com/samirin33/SamiVRCBlocks-Avatar",
+  "documentationUrl": "https://github.com/samirin33/SamiVRCBlocks-Avatar/tree/main/Packages/com.github.samirin33.samivrcblocks-avatar/docs",
+  "changelogUrl": "https://github.com/samirin33/SamiVRCBlocks-Avatar/releases",
+  "vpmDependencies": {
+    "com.vrchat.avatars": ">=3.7.0",
+    "nadena.dev.ndmf": ">=1.5.0",
+    "nadena.dev.modular-avatar": ">=1.8.0"
+  },
+  "legacyFolders": {
+    "Assets\\samirin33\\SamirinVRCUtility Avatar": "",
+    "Assets\\samirin33\\SAMIBlocks Avatar": "",
+    "Assets\\samirin33\\SamiVRCBlocks-Avatar": ""
+  },
+  "license": "MIT"
+}

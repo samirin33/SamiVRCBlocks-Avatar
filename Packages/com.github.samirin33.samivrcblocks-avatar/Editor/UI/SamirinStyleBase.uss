@@ -1,0 +1,6 @@
+.SamirinStyleBase {
+    -unity-font: url("project://database/Packages/com.github.samirin33.samivrcblocks-avatar/Editor/Fonts/NotoSansJP-SemiBold.ttf?fileID=12800000&guid=3fd79a2a11fea6345bacc1632a700394&type=3#NotoSansJP-SemiBold");
+    -unity-font-definition: initial;
+    width: 100%;
+    height: 100%;
+}
