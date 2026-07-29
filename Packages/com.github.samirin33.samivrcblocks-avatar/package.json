@@ -18,7 +18,12 @@
   },
   "legacyFolders": {
     "Assets\\samirin33\\SamirinVRCUtility Avatar": "",
+    "Assets\\samirin33\\SamirinVRCUtility Avatars": "",
+    "Assets\\samirin33\\SAMIBlocks Avatar": "",
     "Assets\\samirin33\\SamiVRCBlocks-Avatar": ""
   },
+  "legacyPackages": [
+    "com.github.samirin33.samirin-vrc-utility.avatars"
+  ],
   "license": "MIT"
 }
