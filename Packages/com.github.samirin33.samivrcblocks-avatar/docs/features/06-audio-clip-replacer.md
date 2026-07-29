@@ -32,7 +32,7 @@ Animator 内の **VRC Animator Play Audio**、または指定 **AudioSource** �
 ## ビルド時の挙動
 
 - NDMF **Resolving**（Modular Avatar より前）で実行されます
-- AnimatorState ターゲット: 対象コントローラを `Assets/Generated/SamiVRCBlocksAvatar/AudioClipReplacer/` に複製し、ステート上の VRC Animator Play Audio を上書きします
+- AnimatorState ターゲット: 対象コントローラを `Assets/Generated/SamirinVRCUtility/AudioClipReplacer/` に複製し、ステート上の VRC Animator Play Audio を上書きします
 - AudioSource ターゲット: 指定 AudioSource の clip / volume / pitch を直接上書きします（コントローラ複製は不要）
 - 処理後、本コンポーネントは削除されます
 

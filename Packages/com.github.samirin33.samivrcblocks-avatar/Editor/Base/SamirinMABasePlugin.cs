@@ -14,7 +14,7 @@ namespace Samirin33.NDMF.Base.Plugin
     {
         public override string QualifiedName => "SamirinMABase";
 
-        public override string DisplayName => "SamiVRCBlocks-Avatar";
+        public override string DisplayName => "SamirinMABase";
 
         protected override void Configure()
         {

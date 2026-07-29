@@ -1,5 +1,5 @@
 {
-    "name": "com.github.samirin33.samivrcblocks-avatar.runtime",
+    "name": "com.github.samirin33.samirin-vrc-utility.runtime",
     "rootNamespace": "",
     "references": [
         "VRC.SDKBase",

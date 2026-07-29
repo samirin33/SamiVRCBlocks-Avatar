@@ -22,28 +22,49 @@ namespace Samirin33.NDMF.Components.Editor
 
         private const string EmptyMotionGUID = "4de039275b65be24c8f0a641d7a44924";
         private const string FPSCounterGUID = "9b06db4aacbe94745a2bcd84f67103eb";
-        private static string GeneratedFolder => "Assets/Generated/SamiVRCBlocksAvatar/ParameterSmoothing";
+        private static string GeneratedFolder => "Assets/Generated/SamirinVRCUtility/ParameterSmoothing";
 
         public static void Build(GameObject avatarRootObject, params ParameterSmoothing[] parameterSmoothings)
         {
+            BuildInternal(avatarRootObject, ensureFpsCounterModule: true, parameterSmoothings);
+        }
+
+        /// <summary>
+        /// インスペクターからのマニュアル生成。ModuleSetter（FPSCounter）は付けない。
+        /// </summary>
+        public static AnimatorController[] BuildManual(GameObject avatarRootObject, params ParameterSmoothing[] parameterSmoothings)
+        {
+            return BuildInternal(avatarRootObject, ensureFpsCounterModule: false, parameterSmoothings);
+        }
+
+        private static AnimatorController[] BuildInternal(GameObject avatarRootObject, bool ensureFpsCounterModule,
+            params ParameterSmoothing[] parameterSmoothings)
+        {
             if (parameterSmoothings == null || parameterSmoothings.Length == 0)
-                return;
+                return Array.Empty<AnimatorController>();
 
             var standaloneComponents = parameterSmoothings
                 .Where(c => c != null && !IsHandledByHalfSyncParam(c))
                 .ToArray();
             if (standaloneComponents.Length == 0)
-                return;
+                return Array.Empty<AnimatorController>();
 
             var mergedInfos = MergeParameterSmoothingData(standaloneComponents);
             if (mergedInfos.Count == 0)
-                return;
+                return Array.Empty<AnimatorController>();
 
             var moduleParent = standaloneComponents.FirstOrDefault()?.gameObject;
-            BuildFromInfos(avatarRootObject, mergedInfos.ToArray(), moduleParent);
+            var controller = BuildFromInfos(avatarRootObject, mergedInfos.ToArray(), moduleParent);
 
-            foreach (var component in standaloneComponents)
-                EnsureFPSCounterModule(component.gameObject);
+            if (ensureFpsCounterModule)
+            {
+                foreach (var component in standaloneComponents)
+                    EnsureFPSCounterModule(component.gameObject);
+            }
+
+            return controller != null
+                ? new[] { controller }
+                : Array.Empty<AnimatorController>();
         }
 
         private static bool IsHandledByHalfSyncParam(ParameterSmoothing component)
@@ -79,27 +100,28 @@ namespace Samirin33.NDMF.Components.Editor
         private const string HalfSyncSmoothingModuleName = "HalfSyncParam_Smoothing_Module";
         private const string StandaloneSmoothingModuleName = "ParameterSmoothing_Module";
 
-        public static void BuildFromHalfSyncParam(GameObject avatarRootObject,
+        public static AnimatorController BuildFromHalfSyncParam(GameObject avatarRootObject,
             ParameterSmoothing.ParameterSmoothingInfo[] infos, GameObject moduleParent)
         {
-            BuildFromInfos(avatarRootObject, infos, moduleParent, HalfSyncSmoothingModuleName, fromHalfSyncParam: true);
+            return BuildFromInfos(avatarRootObject, infos, moduleParent, HalfSyncSmoothingModuleName, fromHalfSyncParam: true);
         }
 
-        public static void BuildFromInfos(GameObject avatarRootObject, ParameterSmoothing.ParameterSmoothingInfo[] infos,
+        public static AnimatorController BuildFromInfos(GameObject avatarRootObject, ParameterSmoothing.ParameterSmoothingInfo[] infos,
             GameObject moduleParent = null, string moduleObjectName = StandaloneSmoothingModuleName,
             bool fromHalfSyncParam = false)
         {
             if (avatarRootObject == null || infos == null || infos.Length == 0)
-                return;
+                return null;
 
             var controller = CreateControllerFromParameterSmoothingData(infos, out var paramNamesToRegister, fromHalfSyncParam);
             if (controller == null)
             {
                 Debug.LogError("[ParameterSmoothing] Animator Controller の生成に失敗しました。MA Merge Animator は登録されません。");
-                return;
+                return null;
             }
 
             AddModularAvatarModule(moduleParent ?? avatarRootObject, controller, paramNamesToRegister, moduleObjectName);
+            return controller;
         }
 
         private static string GetSmoothedParamName(ParameterSmoothing.ParameterSmoothingInfo info)

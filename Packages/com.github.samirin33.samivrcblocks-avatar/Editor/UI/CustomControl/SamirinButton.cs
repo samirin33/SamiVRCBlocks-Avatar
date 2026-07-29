@@ -32,7 +32,7 @@ namespace Samirin.VRCUtility.Avatars
     public class SamirinButton : VisualElement
     {
         public new class UxmlFactory : UxmlFactory<SamirinButton, UxmlTraits> { }
-        private const string ButtonBgFolder = "Packages/com.github.samirin33.samivrcblocks-avatar/Editor/Image/ButtonBG";
+        private const string ButtonBgFolder = "Packages/com.github.samirin33.samirin-vrc-utility.avatars/Editor/Image/ButtonBG";
 
         public new class UxmlTraits : VisualElement.UxmlTraits
         {
@@ -60,7 +60,7 @@ namespace Samirin.VRCUtility.Avatars
             }
         }
 
-        private const string UxmlPath = "Packages/com.github.samirin33.samivrcblocks-avatar/Editor/UI/SamirinButton.uxml";
+        private const string UxmlPath = "Packages/com.github.samirin33.samirin-vrc-utility.avatars/Editor/UI/SamirinButton.uxml";
 
         /// <summary>ボタン文言を表示する Label（name="ButtonText"）。親の最小サイズに合わせてフォントサイズが自動調整されます。</summary>
         public Label ButtonText => this.Q<Label>("ButtonText");

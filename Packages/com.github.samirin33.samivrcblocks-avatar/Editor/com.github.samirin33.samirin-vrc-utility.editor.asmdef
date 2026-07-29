@@ -1,8 +1,8 @@
 {
-    "name": "com.github.samirin33.samivrcblocks-avatar.editor",
+    "name": "com.github.samirin33.samirin-vrc-utility.editor",
     "rootNamespace": "",
     "references": [
-        "com.github.samirin33.samivrcblocks-avatar.runtime",
+        "com.github.samirin33.samirin-vrc-utility.runtime",
         "VRC.SDKBase",
         "VRC.SDK3A",
         "VRC.SDK3A.Editor",

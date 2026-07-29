@@ -22,23 +22,39 @@ namespace Samirin33.NDMF.Components.Editor
         }
 
         private const string EmptyMotionGUID = "4de039275b65be24c8f0a641d7a44924";
-        private static string GeneratedFolder => "Assets/Generated/SamiVRCBlocksAvatar/HalfSyncParam";
+        private static string GeneratedFolder => "Assets/Generated/SamirinVRCUtility/HalfSyncParam";
 
         private static int GetBitCount(HalfSyncParam.syncParamSetting setting)
             => HalfSyncParam.GetBitCount(setting);
 
         public static void Build(GameObject avatarRootObject, params HalfSyncParam[] halfSyncParams)
         {
+            BuildInternal(avatarRootObject, ensureFpsCounterModule: true, halfSyncParams);
+        }
+
+        /// <summary>
+        /// インスペクターからのマニュアル生成。ModuleSetter（FPSCounter）は付けない。
+        /// </summary>
+        public static AnimatorController[] BuildManual(GameObject avatarRootObject, params HalfSyncParam[] halfSyncParams)
+        {
+            return BuildInternal(avatarRootObject, ensureFpsCounterModule: false, halfSyncParams);
+        }
+
+        private static AnimatorController[] BuildInternal(GameObject avatarRootObject, bool ensureFpsCounterModule,
+            params HalfSyncParam[] halfSyncParams)
+        {
             if (halfSyncParams == null || halfSyncParams.Length == 0)
-                return;
+                return Array.Empty<AnimatorController>();
 
             var (mergedSettings, writeDefault) = MergeSettingsFromModule(halfSyncParams);
             if (mergedSettings.Count == 0)
-                return;
+                return Array.Empty<AnimatorController>();
 
             var controller = CreateControllerFromScratch(mergedSettings.ToArray(), writeDefault, out var paramNamesToRegister);
             if (controller == null)
-                return;
+                return Array.Empty<AnimatorController>();
+
+            var result = new List<AnimatorController> { controller };
 
             var moduleParent = halfSyncParams.FirstOrDefault(c => c != null)?.gameObject ?? avatarRootObject;
             AddModularAvatarModule(moduleParent, controller, paramNamesToRegister);
@@ -46,13 +62,22 @@ namespace Samirin33.NDMF.Components.Editor
             var smoothingInfos = ExtractFloatSmoothingInfos(halfSyncParams);
             if (smoothingInfos.Count > 0)
             {
-                ParameterSmoothingBuilder.BuildFromHalfSyncParam(avatarRootObject, smoothingInfos.ToArray(), moduleParent);
-                foreach (var component in halfSyncParams)
+                var smoothingController = ParameterSmoothingBuilder.BuildFromHalfSyncParam(
+                    avatarRootObject, smoothingInfos.ToArray(), moduleParent);
+                if (smoothingController != null)
+                    result.Add(smoothingController);
+
+                if (ensureFpsCounterModule)
                 {
-                    if (component == null || !HasFloatSettings(component)) continue;
-                    ParameterSmoothingBuilder.EnsureFPSCounterModule(component.gameObject);
+                    foreach (var component in halfSyncParams)
+                    {
+                        if (component == null || !HasFloatSettings(component)) continue;
+                        ParameterSmoothingBuilder.EnsureFPSCounterModule(component.gameObject);
+                    }
                 }
             }
+
+            return result.ToArray();
         }
 
         private static bool HasFloatSettings(HalfSyncParam halfSyncParam)

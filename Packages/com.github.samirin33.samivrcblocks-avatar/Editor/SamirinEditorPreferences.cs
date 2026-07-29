@@ -33,12 +33,12 @@ namespace Samirin33.Editor
         }
 
         [SettingsProvider]
-        public static SettingsProvider CreateSamiVRCBlocksAvatarPreferences()
+        public static SettingsProvider CreateSamirinVRCUtilityPreferences()
         {
-            return new SettingsProvider("Preferences/SamiVRCBlocks-Avatar", SettingsScope.User)
+            return new SettingsProvider("Preferences/Samirin VRC Utility", SettingsScope.User)
             {
-                label = "SamiVRCBlocks-Avatar",
-                keywords = new HashSet<string>(new[] { "SamiVRCBlocks", "SB", "Avatar", "Animation", "Realtime", "Font", "Background" }),
+                label = "Samirin VRC Utility",
+                keywords = new HashSet<string>(new[] { "Samirin", "VRC", "Avatar", "Animation", "Realtime", "Font", "Background" }),
                 guiHandler = (searchContext) =>
                 {
                     EditorGUILayout.Space(8);

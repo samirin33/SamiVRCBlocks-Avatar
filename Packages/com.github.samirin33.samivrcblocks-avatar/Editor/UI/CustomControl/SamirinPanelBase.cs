@@ -15,7 +15,7 @@ namespace Samirin.VRCUtility.Avatars.UI
 
         public new class UxmlTraits : VisualElement.UxmlTraits { }
 
-        private const string UxmlPath = "Packages/com.github.samirin33.samivrcblocks-avatar/Editor/UI/SPanel.uxml";
+        private const string UxmlPath = "Packages/com.github.samirin33.samirin-vrc-utility.avatars/Editor/UI/SPanel.uxml";
 
         /// <summary>背景付きのコンテナ（name="Background"）。子要素はこの中に追加してください。</summary>
         public VisualElement Background => this.Q("Background");
