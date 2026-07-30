@@ -30,7 +30,10 @@ namespace Samirin33.NDMF.Components.Editor
 
                 EditorGUILayout.Space(8);
                 if (GUILayout.Button("今すぐチェック", GUILayout.Height(24)))
-                    PackageVersionCheckerService.ScheduleCheck((PackageVersionChecker)target, forceDialog: true);
+                    PackageVersionCheckerService.CheckAndWarn(
+                        (PackageVersionChecker)target,
+                        forceDialog: true,
+                        showSatisfiedDialog: true);
 
                 serializedObject.ApplyModifiedProperties();
             });

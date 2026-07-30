@@ -38,23 +38,51 @@ namespace Samirin33.NDMF.Components.Editor
             if (checker == null)
                 return;
 
+            // 手動チェックは即時実行（delayCall だとダイアログが出ない／失われることがある）
+            if (forceDialog && !EditorApplication.isCompiling && !EditorApplication.isUpdating)
+            {
+                CheckAndWarn(checker, forceDialog: true, showSatisfiedDialog: false);
+                return;
+            }
+
             PendingInstanceIds.Add(checker.GetInstanceID());
             if (_scheduled)
                 return;
 
             _scheduled = true;
-            EditorApplication.delayCall += () =>
-            {
-                _scheduled = false;
-                if (EditorApplication.isCompiling || EditorApplication.isUpdating)
-                {
-                    _scheduled = true;
-                    EditorApplication.delayCall += () => ScheduleFlush(forceDialog);
-                    return;
-                }
+            EditorApplication.delayCall += FlushWhenReady;
+        }
 
-                ScheduleFlush(forceDialog);
-            };
+        /// <summary>
+        /// 配置された GameObject 配下の PackageVersionChecker を照合する。
+        /// </summary>
+        public static void CheckPlacedHierarchy(GameObject root, bool forceDialog = true)
+        {
+            if (root == null)
+                return;
+
+            var checkers = root.GetComponentsInChildren<PackageVersionChecker>(true);
+            if (checkers == null || checkers.Length == 0)
+            {
+                Debug.Log(
+                    $"[PackageVersionChecker] 配置オブジェクト「{root.name}」配下に PackageVersionChecker がありません。");
+                return;
+            }
+
+            foreach (var checker in checkers)
+                ScheduleCheck(checker, forceDialog);
+        }
+
+        private static void FlushWhenReady()
+        {
+            if (EditorApplication.isCompiling || EditorApplication.isUpdating)
+            {
+                EditorApplication.delayCall += FlushWhenReady;
+                return;
+            }
+
+            _scheduled = false;
+            ScheduleFlush(forceDialog: true);
         }
 
         private static void ScheduleFlush(bool forceDialog)
@@ -116,14 +144,31 @@ namespace Samirin33.NDMF.Components.Editor
             return result;
         }
 
-        public static void CheckAndWarn(PackageVersionChecker checker, bool forceDialog = false)
+        public static void CheckAndWarn(
+            PackageVersionChecker checker,
+            bool forceDialog = false,
+            bool showSatisfiedDialog = false)
         {
-            if (checker == null || !checker.gameObject.scene.IsValid())
+            if (checker == null)
+                return;
+
+            // プレハブアセット上の手動チェックも許可。自動チェックのみシーン内を要求。
+            if (!forceDialog && !checker.gameObject.scene.IsValid())
                 return;
 
             var mismatches = CollectMismatches(checker);
             if (mismatches.Count == 0)
+            {
+                if (showSatisfiedDialog)
+                {
+                    EditorUtility.DisplayDialog(
+                        "Package Version Checker",
+                        "要求バージョンを満たしています！",
+                        "閉じる");
+                }
+
                 return;
+            }
 
             var warnKey = SessionWarnedPrefix + BuildMismatchKey(mismatches);
             if (!forceDialog && SessionState.GetBool(warnKey, false))
@@ -145,18 +190,18 @@ namespace Samirin33.NDMF.Components.Editor
         public static string BuildWarningMessage(IReadOnlyList<Mismatch> mismatches)
         {
             var sb = new StringBuilder();
-            sb.AppendLine("プロジェクトのパッケージ／SDK バージョンが、このオブジェクトの要求より低いです。");
+            sb.AppendLine("お使いのプロジェクトのパッケージのバージョンが低いです！");
             sb.AppendLine();
             foreach (var m in mismatches)
             {
                 var current = m.IsMissing ? "未インストール" : m.InstalledVersion;
                 sb.AppendLine($"・{m.DisplayName}");
-                sb.AppendLine($"　プロジェクト: {current}");
-                sb.AppendLine($"　要求: {m.RequiredVersion}");
+                sb.AppendLine($"現在: {current}");
+                sb.AppendLine($"要求: {m.RequiredVersion}");
             }
 
             sb.AppendLine();
-            sb.Append("「自動修正」で Packages/vpm-manifest.json の依存バージョンを要求値へ上げます。");
+            sb.Append("「自動修正」でバージョンを上げられます。");
             return sb.ToString();
         }
 
@@ -191,17 +236,30 @@ namespace Samirin33.NDMF.Components.Editor
 
             var updated = false;
             var report = new StringBuilder();
+            var syncedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var m in mismatches)
             {
                 if (TryUpsertVpmDependencyVersion(ref json, m.PackageId, m.RequiredVersion))
                 {
                     updated = true;
+                    syncedIds.Add(m.PackageId);
                     report.AppendLine($"・{m.DisplayName} → {m.RequiredVersion}");
                 }
                 else
                 {
                     report.AppendLine($"・{m.DisplayName}: 更新できませんでした");
+                }
+
+                // VRChat SDK は avatars / base を同バージョンに揃える
+                if (TryGetVrchatSdkPairId(m.PackageId, out var pairId) && !syncedIds.Contains(pairId))
+                {
+                    if (TryUpsertVpmDependencyVersion(ref json, pairId, m.RequiredVersion))
+                    {
+                        updated = true;
+                        syncedIds.Add(pairId);
+                        report.AppendLine($"・{pairId} → {m.RequiredVersion}（SDK 同期）");
+                    }
                 }
             }
 
@@ -230,17 +288,37 @@ namespace Samirin33.NDMF.Components.Editor
             AssetDatabase.Refresh();
 
             var resolved = TryInvokeVpmResolve();
-            var resolveNote = resolved
-                ? "VPM Resolve を実行しました。パッケージのダウンロードが完了するまでお待ちください。"
-                : "vpm-manifest.json は更新しました。VRChat Package Resolver ウィンドウ、または Creator Companion から Resolve を実行してください。";
+            // var resolveNote = resolved
+            //     ? "VPM Resolve を実行しました。パッケージのダウンロードが完了するまでお待ちください。"
+            //     : "vpm-manifest.json は更新しました。VRChat Package Resolver ウィンドウ、または Creator Companion から Resolve を実行してください。";
 
-            EditorUtility.DisplayDialog(
-                "Package Version Checker",
-                "依存バージョンを更新しました。\n\n" + report + "\n" + resolveNote,
-                "閉じる");
+            // EditorUtility.DisplayDialog(
+            //     "Package Version Checker",
+            //     "依存バージョンを更新しました。\n\n" + report + "\n" + resolveNote,
+            //     "閉じる");
+
+            Debug.Log("依存バージョンを更新しました。\n\n" + report);
 
             Client.Resolve();
             return true;
+        }
+
+        private static bool TryGetVrchatSdkPairId(string packageId, out string pairId)
+        {
+            if (string.Equals(packageId, "com.vrchat.avatars", StringComparison.OrdinalIgnoreCase))
+            {
+                pairId = "com.vrchat.base";
+                return true;
+            }
+
+            if (string.Equals(packageId, "com.vrchat.base", StringComparison.OrdinalIgnoreCase))
+            {
+                pairId = "com.vrchat.avatars";
+                return true;
+            }
+
+            pairId = null;
+            return false;
         }
 
         public sealed class PackageChoice
@@ -589,14 +667,79 @@ namespace Samirin33.NDMF.Components.Editor
         }
 
         /// <summary>
-        /// vpm-manifest.json の dependencies に version を upsert する。
+        /// vpm-manifest.json の dependencies / locked 双方にある package の version を upsert する。
+        /// VPM Resolve は locked を優先するため、dependencies だけの更新ではインストールが変わらない。
         /// </summary>
         internal static bool TryUpsertVpmDependencyVersion(ref string json, string packageId, string version)
         {
             if (string.IsNullOrEmpty(json) || string.IsNullOrEmpty(packageId) || string.IsNullOrEmpty(version))
                 return false;
 
-            // dependencies 〜 locked 手前のブロックだけを対象にする（locked を誤って書き換えない）
+            var changed = false;
+
+            // "package.id": { "version": "..." } 形式（dependencies / locked の両方）を更新。
+            // nested dependencies の "id": ">=x" 文字列制約にはマッチしない。
+            // MatchEvaluator 必須（"$1" + "3.x" だと $13 グループ参照になる）
+            var entryRegex = new Regex(
+                $"(\"{Regex.Escape(packageId)}\"\\s*:\\s*\\{{\\s*\"version\"\\s*:\\s*\")([^\"]+)(\")",
+                RegexOptions.CultureInvariant);
+
+            if (entryRegex.IsMatch(json))
+            {
+                json = entryRegex.Replace(json, m =>
+                {
+                    if (m.Groups[2].Value == version)
+                        return m.Value;
+                    changed = true;
+                    return m.Groups[1].Value + version + m.Groups[3].Value;
+                });
+            }
+
+            // dependencies に無ければ追加（Resolve の要求元）
+            if (!IsPackageInDependenciesSection(json, packageId))
+            {
+                if (TryAddPackageToDependencies(ref json, packageId, version))
+                    changed = true;
+            }
+            else if (!changed)
+            {
+                // dependencies は既に要求値だが、locked / 実体が古い場合でも Resolve を走らせる
+                changed = true;
+            }
+
+            return changed;
+        }
+
+        private static bool IsPackageInDependenciesSection(string json, string packageId)
+        {
+            if (!TryGetDependenciesBody(json, out var body, out _, out _))
+                return false;
+
+            return Regex.IsMatch(
+                body,
+                $"\"{Regex.Escape(packageId)}\"\\s*:\\s*\\{{",
+                RegexOptions.CultureInvariant);
+        }
+
+        private static bool TryAddPackageToDependencies(ref string json, string packageId, string version)
+        {
+            if (!TryGetDependenciesBody(json, out var body, out var bodyIndex, out var bodyLength))
+                return false;
+
+            var hasEntries = body.IndexOf('"') >= 0;
+            var comma = hasEntries ? "," : "";
+            var newBody = $"\n    \"{packageId}\": {{\n      \"version\": \"{version}\"\n    }}{comma}{body}";
+            json = json.Substring(0, bodyIndex) + newBody + json.Substring(bodyIndex + bodyLength);
+            return true;
+        }
+
+        private static bool TryGetDependenciesBody(string json, out string body, out int bodyIndex, out int bodyLength)
+        {
+            body = null;
+            bodyIndex = 0;
+            bodyLength = 0;
+
+            // dependencies 〜 locked 手前のブロックだけを対象にする
             var depsSection = Regex.Match(
                 json,
                 "\"dependencies\"\\s*:\\s*\\{(?<body>[\\s\\S]*?)\\n(?<indent>\\s*)\\}\\s*,\\s*\\n\\s*\"locked\"",
@@ -604,7 +747,6 @@ namespace Samirin33.NDMF.Components.Editor
 
             if (!depsSection.Success)
             {
-                // locked が無い場合のフォールバック
                 depsSection = Regex.Match(
                     json,
                     "\"dependencies\"\\s*:\\s*\\{(?<body>[\\s\\S]*?)\\n(?<indent>\\s*)\\}",
@@ -614,26 +756,9 @@ namespace Samirin33.NDMF.Components.Editor
             if (!depsSection.Success)
                 return false;
 
-            var body = depsSection.Groups["body"].Value;
-            var packageVersion = new Regex(
-                $"(\"{Regex.Escape(packageId)}\"\\s*:\\s*\\{{[\\s\\S]*?\"version\"\\s*:\\s*\")([^\"]+)(\")",
-                RegexOptions.CultureInvariant);
-
-            string newBody;
-            if (packageVersion.IsMatch(body))
-            {
-                newBody = packageVersion.Replace(body, $"$1{version}$3", 1);
-            }
-            else
-            {
-                var hasEntries = body.IndexOf('"') >= 0;
-                var comma = hasEntries ? "," : "";
-                newBody = $"\n    \"{packageId}\": {{\n      \"version\": \"{version}\"\n    }}{comma}{body}";
-            }
-
-            json = json.Substring(0, depsSection.Groups["body"].Index)
-                   + newBody
-                   + json.Substring(depsSection.Groups["body"].Index + depsSection.Groups["body"].Length);
+            body = depsSection.Groups["body"].Value;
+            bodyIndex = depsSection.Groups["body"].Index;
+            bodyLength = depsSection.Groups["body"].Length;
             return true;
         }
 

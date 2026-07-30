@@ -22,7 +22,7 @@ namespace Samirin33.NDMF.Components.Editor
                 serializedObject.Update();
 
                 DrawHelpBoxWithDefaultFont(
-                    "同じ id を持つコンポーネントがアバター内に複数ある場合、ビルド時に警告ダイアログを出し、最初の1つ以外の GameObject を削除します。",
+                    "同じidを持つコンポーネントがアバター内に複数ある場合に重複を回避します。",
                     MessageType.Info);
 
                 EditorGUILayout.PropertyField(_id, new GUIContent("ID"));
