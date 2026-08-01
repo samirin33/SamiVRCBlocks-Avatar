@@ -42,12 +42,13 @@ namespace Samirin33.NDMF.Components
                         $"[InverseBoneProxy] Target not found: \"{targetObject?.referencePath}\" (on {name})",
                         this);
                 }
-
-                return;
             }
-
-            InverseBoneProxyUtil.ApplyBoneProxy(found, transform, attachmentMode, matchScale);
+            else
+            {
+                InverseBoneProxyUtil.ApplyBoneProxy(found, transform, attachmentMode, matchScale);
+            }
 #endif
+            DestroyImmediate(this);
         }
 
         void LateUpdate()
