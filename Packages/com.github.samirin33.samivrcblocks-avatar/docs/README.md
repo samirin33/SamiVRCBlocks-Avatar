@@ -13,3 +13,6 @@
 | 05 | [05-module-setter.md](features/05-module-setter.md) | ModuleSetter |
 | 06 | [06-audio-clip-replacer.md](features/06-audio-clip-replacer.md) | AudioClipReplacer |
 | 07 | [07-preventing-duplicate-objects.md](features/07-preventing-duplicate-objects.md) | PreventingDuplicateObjects |
+| 08 | [08-inverse-bone-proxy.md](features/08-inverse-bone-proxy.md) | InverseBoneProxy |
+| 09 | [09-fix-hand-vector.md](features/09-fix-hand-vector.md) | FixHandVector |
+| 10 | [10-tuning-object.md](features/10-tuning-object.md) | TuningObject |

@@ -99,9 +99,7 @@ namespace Samirin33.NDMF.Components.Editor
                 {
                     if (setting.paramType != HalfSyncParam.ParamType.Float) continue;
 
-                    var paramName = string.IsNullOrEmpty(setting.paramName)
-                        ? $"Param_{setting.paramType}{setting.bitType}"
-                        : setting.paramName;
+                    var paramName = HalfSyncParam.GetParamName(setting);
 
                     if (!processedParamNames.Add(paramName)) continue;
 
@@ -147,9 +145,7 @@ namespace Samirin33.NDMF.Components.Editor
                 {
                     if (setting.paramType != HalfSyncParam.ParamType.Float) continue;
 
-                    var paramName = string.IsNullOrEmpty(setting.paramName)
-                        ? $"Param_{setting.paramType}{setting.bitType}"
-                        : setting.paramName;
+                    var paramName = HalfSyncParam.GetParamName(setting);
 
                     if (!processedParamNames.Add(paramName)) continue;
 
@@ -174,9 +170,7 @@ namespace Samirin33.NDMF.Components.Editor
                 {
                     if (GetBitCount(setting) < 1) continue;
 
-                    var paramName = string.IsNullOrEmpty(setting.paramName)
-                        ? $"Param_{setting.paramType}{setting.bitType}"
-                        : setting.paramName;
+                    var paramName = HalfSyncParam.GetParamName(setting);
 
                     if (processedParamNames.Contains(paramName))
                         continue;
@@ -223,7 +217,7 @@ namespace Samirin33.NDMF.Components.Editor
             foreach (var setting in settings)
             {
                 var bitCount = GetBitCount(setting);
-                var paramName = string.IsNullOrEmpty(setting.paramName) ? $"Param_{setting.paramType}{setting.bitType}" : setting.paramName;
+                var paramName = HalfSyncParam.GetParamName(setting);
                 var maxValue = (1 << bitCount) - 1;
                 var isFloat = setting.paramType == HalfSyncParam.ParamType.Float;
                 var intParamName = $"{paramName}_Int";
@@ -241,7 +235,7 @@ namespace Samirin33.NDMF.Components.Editor
                 controller.AddParameter(intParamName, AnimatorControllerParameterType.Int);
                 for (int i = 0; i < bitCount; i++)
                 {
-                    var syncParamName = $"SUM/HalfParam/{intParamName}/{i}";
+                    var syncParamName = HalfSyncParam.GetSyncBoolParamName(paramName, i);
                     controller.AddParameter(syncParamName, AnimatorControllerParameterType.Bool);
                     paramNamesToRegister.Add((syncParamName, ParameterSyncType.Bool));
                 }
@@ -343,6 +337,7 @@ namespace Samirin33.NDMF.Components.Editor
                 remoteTransition.AddCondition(AnimatorConditionMode.IfNot, 0, "IsLocal");
                 for (int b = 0; b < bitCount; b++)
                 {
+                    // paramName は呼び出し側から渡される int パラメータ名（{名前}_Int）
                     var syncParamName = $"SUM/HalfParam/{paramName}/{b}";
                     var boolVal = ((value >> b) & 1) != 0;
                     remoteTransition.AddCondition(boolVal ? AnimatorConditionMode.If : AnimatorConditionMode.IfNot, 0, syncParamName);
@@ -481,11 +476,7 @@ namespace Samirin33.NDMF.Components.Editor
         }
 
         private static string GetParamName(HalfSyncParam.syncParamSetting setting)
-        {
-            return string.IsNullOrEmpty(setting.paramName)
-                ? $"Param_{setting.paramType}{setting.bitType}"
-                : setting.paramName;
-        }
+            => HalfSyncParam.GetParamName(setting);
 
         private static (float min, float max) GetSourceRange(HalfSyncParam.syncParamSetting setting)
         {
@@ -646,6 +637,7 @@ namespace Samirin33.NDMF.Components.Editor
             {
                 for (int i = 0; i < boolValues.Length; i++)
                 {
+                    // paramName は int パラメータ名（{名前}_Int）
                     var syncParamName = $"SUM/HalfParam/{paramName}/{i}";
                     parametersProp.InsertArrayElementAtIndex(i);
                     SetParamDriverEntry(parametersProp.GetArrayElementAtIndex(i), syncParamName, boolValues[i] ? 1 : 0);

@@ -10,6 +10,8 @@
         "VRC.Dynamics",
         "VRC.SDK3.Dynamics.Constraint",
         "nadena.dev.ndmf",
+        "nadena.dev.ndmf.runtime",
+        "nadena.dev.ndmf.vrchat",
         "nadena.dev.modular-avatar.core",
         "nadena.dev.modular-avatar.core.editor"
     ],

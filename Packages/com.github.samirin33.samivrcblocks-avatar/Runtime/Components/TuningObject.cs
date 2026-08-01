@@ -1,0 +1,488 @@
+using System;
+using System.Collections.Generic;
+using UnityEngine;
+using Samirin33.NDMF.Base;
+
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
+
+namespace Samirin33.NDMF.Components
+{
+    /// <summary>
+    /// チューニング用のギズモ表示コンポーネント。
+    /// 自身または親が選択されているとき、矢印・中心球・任意テキスト・半透明メッシュを Scene ビューに描画する。
+    /// active 時は targetTransforms に自身+Offset を適用する。
+    /// ビルド時、子が無い場合は自身の GameObject を削除する。
+    /// </summary>
+    [ExecuteAlways]
+    [DisallowMultipleComponent]
+    [AddComponentMenu("SamiVRCBlocks-Avatar/SB TuningObject")]
+    public class TuningObject : SamirinMABase
+    {
+        [Serializable]
+        public class TargetTransform
+        {
+            public Transform transform;
+            public Vector3 offsetPosition = Vector3.zero;
+            public Vector3 offsetRotation = Vector3.zero;
+            public Vector3 offsetScale = Vector3.one;
+        }
+
+        [Serializable]
+        public class ArrowGizmo
+        {
+            [Tooltip("矢印の向き（ゼロベクトルの場合は描画しない）")]
+            public Vector3 direction = Vector3.forward;
+
+            [Tooltip("矢印の長さ")]
+            [Min(0f)]
+            public float length = 0.1f;
+
+            [Tooltip("矢印先端（ヘッド）の大きさ")]
+            [Min(0f)]
+            public float headSize = 0.02f;
+
+            [Tooltip("矢印の色")]
+            public Color color = Color.cyan;
+
+            [Tooltip("true ならローカル空間、false ならワールド空間で direction を解釈する")]
+            public bool localSpace = true;
+        }
+
+        [Tooltip("true のとき、Target に自身の Transform + Offset を継続適用する")]
+        public bool active;
+
+        [Header("Target Transforms")]
+        public TargetTransform[] targetTransforms;
+
+        [Tooltip("中心点の球を表示する")]
+        public bool showSphere = true;
+
+        [Tooltip("中心球の半径")]
+        [Min(0f)]
+        public float sphereRadius = 0.015f;
+
+        [Tooltip("中心球の色")]
+        public Color sphereColor = new Color(1f, 0.85f, 0.2f, 0.9f);
+
+        [Tooltip("描画する矢印の一覧（数・向き・長さ・色は自由）")]
+        public List<ArrowGizmo> arrows = new List<ArrowGizmo>
+        {
+            new ArrowGizmo { direction = Vector3.forward, length = 0.1f, color = Color.cyan },
+        };
+
+        [Tooltip("中心の右下にテキストを表示する")]
+        public bool showLabel;
+
+        [Tooltip("表示するテキスト")]
+        public string labelText = "";
+
+        [Tooltip("テキストの色")]
+        public Color labelColor = Color.white;
+
+        [Tooltip("中心からの画面上オフセット（右・下方向のワールド換算距離）")]
+        [Min(0f)]
+        public float labelOffset = 0.03f;
+
+        [Tooltip("任意メッシュを半透明で表示する")]
+        public bool showMesh;
+
+        [Tooltip("表示するメッシュ")]
+        public Mesh previewMesh;
+
+        [Tooltip("メッシュの色（アルファで半透明度を指定）")]
+        public Color meshColor = new Color(0.3f, 0.8f, 1f, 0.35f);
+
+        [Tooltip("メッシュのローカルオフセット")]
+        public Vector3 meshOffset = Vector3.zero;
+
+        [Tooltip("メッシュのローカル回転（Euler）")]
+        public Vector3 meshRotation = Vector3.zero;
+
+        [Tooltip("メッシュのローカルスケール")]
+        public Vector3 meshScale = Vector3.one;
+
+        private void Update()
+        {
+            if (!active) return;
+#if UNITY_EDITOR
+            // エディタでは EditorUpdate 側で適用する（配置スナップ待ち中に Target を動かさない）
+            if (!Application.isPlaying) return;
+#endif
+            ApplyToTargets();
+        }
+
+        public override void OnBuild(SamirinBuildPhase buildPhase, bool beforeModularAvatar, GameObject avatarRootObject)
+        {
+            // MA 処理後に子の有無を判定し、空なら GameObject ごと削除する
+            if (buildPhase != SamirinBuildPhase.Transforming || beforeModularAvatar)
+                return;
+
+            if (transform.childCount == 0)
+                DestroyImmediate(gameObject);
+            else
+                DestroyImmediate(this);
+        }
+
+        /// <summary>
+        /// 各 Target に、自身の Transform + Offset を適用する。
+        /// </summary>
+        public void ApplyToTargets()
+        {
+            if (targetTransforms == null) return;
+
+            for (int i = 0; i < targetTransforms.Length; i++)
+                ApplyToTarget(i);
+        }
+
+        public void ApplyToTarget(int index)
+        {
+            if (!TryGetEntry(index, out var entry)) return;
+            if (entry.transform == transform) return;
+
+            var target = entry.transform;
+            var position = transform.TransformPoint(entry.offsetPosition);
+            var rotation = transform.rotation * Quaternion.Euler(entry.offsetRotation);
+            var lossyScale = Vector3.Scale(transform.lossyScale, entry.offsetScale);
+
+            target.SetPositionAndRotation(position, rotation);
+            SetLossyScale(target, lossyScale);
+        }
+
+        /// <summary>
+        /// 自身を指定 Target のワールド位置・回転・スケールへ移動する。
+        /// </summary>
+        public void MoveSelfToTarget(int index)
+        {
+            if (!TryGetEntry(index, out var entry)) return;
+            if (entry.transform == transform) return;
+
+#if UNITY_EDITOR
+            Undo.RecordObject(transform, "Move TuningObject to Target");
+#endif
+            var target = entry.transform;
+            transform.SetPositionAndRotation(target.position, target.rotation);
+            SetLossyScale(transform, target.lossyScale);
+#if UNITY_EDITOR
+            EditorUtility.SetDirty(transform);
+#endif
+        }
+
+        /// <summary>
+        /// 自身を「Target − Offset」の姿勢へ移動する（Apply の逆変換）。
+        /// Active 適用後も Target が動かない位置に自身を置く。
+        /// </summary>
+        public void AlignSelfToTargetMinusOffset(int index)
+        {
+            if (!TryGetEntry(index, out var entry)) return;
+            if (entry.transform == transform) return;
+
+#if UNITY_EDITOR
+            Undo.RecordObject(transform, "Align TuningObject to Target - Offset");
+#endif
+            var target = entry.transform;
+            var rotation = target.rotation * Quaternion.Inverse(Quaternion.Euler(entry.offsetRotation));
+            var lossyScale = DivideScale(target.lossyScale, entry.offsetScale);
+
+            transform.rotation = rotation;
+            SetLossyScale(transform, lossyScale);
+            // TransformPoint(offset) == position + TransformVector(offset)
+            transform.position = target.position - transform.TransformVector(entry.offsetPosition);
+#if UNITY_EDITOR
+            EditorUtility.SetDirty(transform);
+#endif
+        }
+
+        /// <summary>
+        /// 自身と Target の現在の差分を Offset として登録する。
+        /// </summary>
+        public void CaptureOffsetFromTarget(int index)
+        {
+            if (!TryGetEntry(index, out var entry)) return;
+            if (entry.transform == transform) return;
+
+#if UNITY_EDITOR
+            Undo.RecordObject(this, "Capture TuningObject Offset");
+#endif
+            var target = entry.transform;
+            entry.offsetPosition = transform.InverseTransformPoint(target.position);
+            entry.offsetRotation = (Quaternion.Inverse(transform.rotation) * target.rotation).eulerAngles;
+            entry.offsetScale = DivideScale(target.lossyScale, transform.lossyScale);
+#if UNITY_EDITOR
+            EditorUtility.SetDirty(this);
+#endif
+        }
+
+        private bool TryGetEntry(int index, out TargetTransform entry)
+        {
+            entry = null;
+            if (targetTransforms == null || index < 0 || index >= targetTransforms.Length)
+                return false;
+            entry = targetTransforms[index];
+            return entry != null && entry.transform != null;
+        }
+
+        private static void SetLossyScale(Transform target, Vector3 lossyScale)
+        {
+            var parent = target.parent;
+            if (parent == null)
+            {
+                target.localScale = lossyScale;
+                return;
+            }
+
+            var parentLossy = parent.lossyScale;
+            target.localScale = DivideScale(lossyScale, parentLossy);
+        }
+
+        private static Vector3 DivideScale(Vector3 a, Vector3 b)
+        {
+            return new Vector3(
+                ApproxDiv(a.x, b.x),
+                ApproxDiv(a.y, b.y),
+                ApproxDiv(a.z, b.z));
+        }
+
+        private static float ApproxDiv(float a, float b)
+        {
+            return Mathf.Abs(b) > 1e-8f ? a / b : a;
+        }
+
+#if UNITY_EDITOR
+        private static Material s_translucentMaterial;
+
+        private const double PlacementAlignDelaySeconds = 0.25;
+        private const double PlacementAlignGiveUpSeconds = 3.0;
+        private const int PlacementAlignMinFrames = 5;
+
+        [SerializeField, HideInInspector]
+        private bool _hasAlignedAfterPlacement;
+
+        private bool _waitingForPlacementAlign;
+        private double _placementAlignStartTime;
+        private int _placementAlignFrames;
+
+        private void OnEnable()
+        {
+            EditorApplication.update -= EditorUpdate;
+            EditorApplication.update += EditorUpdate;
+            BeginPlacementAlignWait();
+        }
+
+        private void OnDisable()
+        {
+            EditorApplication.update -= EditorUpdate;
+        }
+
+        private void Reset()
+        {
+            _hasAlignedAfterPlacement = false;
+            BeginPlacementAlignWait();
+        }
+
+        private void BeginPlacementAlignWait()
+        {
+            if (Application.isPlaying || _hasAlignedAfterPlacement) return;
+            if (EditorUtility.IsPersistent(gameObject)) return;
+
+            _waitingForPlacementAlign = true;
+            _placementAlignStartTime = EditorApplication.timeSinceStartup;
+            _placementAlignFrames = 0;
+        }
+
+        /// <summary>
+        /// シーン配置直後は Transform 参照や階層が未確定なことがあるため、
+        /// 短いディレイ後に targetTransforms[0] − Offset へ自身を合わせる。
+        /// 整列完了（または諦める）までは Active の Target 適用も行わない。
+        /// </summary>
+        private void TryAlignOnScenePlacement()
+        {
+            if (!_waitingForPlacementAlign || _hasAlignedAfterPlacement || Application.isPlaying)
+                return;
+
+            _placementAlignFrames++;
+            var elapsed = EditorApplication.timeSinceStartup - _placementAlignStartTime;
+
+            if (_placementAlignFrames < PlacementAlignMinFrames
+                || elapsed < PlacementAlignDelaySeconds)
+                return;
+
+            if (TryGetEntry(0, out _))
+            {
+                AlignSelfToTargetMinusOffset(0);
+                _hasAlignedAfterPlacement = true;
+                _waitingForPlacementAlign = false;
+                EditorUtility.SetDirty(this);
+                return;
+            }
+
+            // Target がまだ無い場合は待ち続ける。一定時間で諦めて Active 適用を許可する
+            if (elapsed >= PlacementAlignGiveUpSeconds)
+            {
+                _waitingForPlacementAlign = false;
+                _hasAlignedAfterPlacement = true;
+                EditorUtility.SetDirty(this);
+            }
+        }
+
+        private void EditorUpdate()
+        {
+            if (this == null || Application.isPlaying) return;
+
+            // Active 適用より先に、ディレイ付きで配置時アライメントを行う
+            if (_waitingForPlacementAlign && !_hasAlignedAfterPlacement)
+            {
+                TryAlignOnScenePlacement();
+                // 整列待ち中は Target を動かさない（先に Apply するとスナップ基準が壊れる）
+                if (_waitingForPlacementAlign)
+                    return;
+            }
+
+            if (active)
+                ApplyToTargets();
+        }
+
+        private void OnDrawGizmos()
+        {
+            if (!IsSelfOrParentSelected()) return;
+            DrawGizmosInternal();
+        }
+
+        private bool IsSelfOrParentSelected()
+        {
+            var selected = Selection.gameObjects;
+            if (selected == null || selected.Length == 0) return false;
+
+            for (int i = 0; i < selected.Length; i++)
+            {
+                var go = selected[i];
+                if (go == null) continue;
+                if (go == gameObject) return true;
+                if (transform.IsChildOf(go.transform)) return true;
+            }
+
+            return false;
+        }
+
+        private void DrawGizmosInternal()
+        {
+            var origin = transform.position;
+
+            if (showMesh && previewMesh != null)
+                DrawTranslucentMesh();
+
+            if (showSphere && sphereRadius > 0f)
+            {
+                Gizmos.color = sphereColor;
+                Gizmos.DrawSphere(origin, sphereRadius);
+                Gizmos.DrawWireSphere(origin, sphereRadius);
+            }
+
+            if (arrows != null)
+            {
+                for (int i = 0; i < arrows.Count; i++)
+                {
+                    var arrow = arrows[i];
+                    if (arrow == null) continue;
+                    DrawArrow(origin, arrow);
+                }
+            }
+
+            if (showLabel && !string.IsNullOrEmpty(labelText))
+                DrawLabel(origin);
+        }
+
+        private void DrawArrow(Vector3 origin, ArrowGizmo arrow)
+        {
+            var dir = arrow.direction;
+            if (dir.sqrMagnitude < 1e-10f || arrow.length <= 0f) return;
+
+            if (arrow.localSpace)
+                dir = transform.TransformDirection(dir);
+
+            dir.Normalize();
+            var tip = origin + dir * arrow.length;
+
+            Gizmos.color = arrow.color;
+            Gizmos.DrawLine(origin, tip);
+
+            var headSize = arrow.headSize > 0f ? arrow.headSize : arrow.length * 0.2f;
+            var headBase = tip - dir * headSize;
+
+            var side = Vector3.Cross(dir, Vector3.up);
+            if (side.sqrMagnitude < 1e-6f)
+                side = Vector3.Cross(dir, Vector3.right);
+            side.Normalize();
+            var up = Vector3.Cross(side, dir).normalized;
+
+            var half = headSize * 0.5f;
+            Gizmos.DrawLine(tip, headBase + side * half);
+            Gizmos.DrawLine(tip, headBase - side * half);
+            Gizmos.DrawLine(tip, headBase + up * half);
+            Gizmos.DrawLine(tip, headBase - up * half);
+            Gizmos.DrawLine(headBase + side * half, headBase - side * half);
+            Gizmos.DrawLine(headBase + up * half, headBase - up * half);
+        }
+
+        private void DrawLabel(Vector3 origin)
+        {
+            var cam = SceneView.currentDrawingSceneView != null
+                ? SceneView.currentDrawingSceneView.camera
+                : Camera.current;
+
+            Vector3 right = Vector3.right;
+            Vector3 down = Vector3.down;
+            if (cam != null)
+            {
+                right = cam.transform.right;
+                down = -cam.transform.up;
+            }
+
+            var pos = origin + (right + down) * labelOffset;
+            var style = new GUIStyle(EditorStyles.boldLabel)
+            {
+                normal = { textColor = labelColor },
+                alignment = TextAnchor.UpperLeft,
+            };
+            Handles.Label(pos, labelText, style);
+        }
+
+        private void DrawTranslucentMesh()
+        {
+            var rotation = transform.rotation * Quaternion.Euler(meshRotation);
+            var position = transform.TransformPoint(meshOffset);
+            var scale = Vector3.Scale(transform.lossyScale, meshScale);
+            var matrix = Matrix4x4.TRS(position, rotation, scale);
+
+            var mat = GetTranslucentMaterial();
+            mat.color = meshColor;
+            mat.SetPass(0);
+            Graphics.DrawMeshNow(previewMesh, matrix);
+        }
+
+        private static Material GetTranslucentMaterial()
+        {
+            if (s_translucentMaterial != null) return s_translucentMaterial;
+
+            var shader = Shader.Find("Hidden/Internal-Colored");
+            if (shader == null)
+                shader = Shader.Find("Sprites/Default");
+            if (shader == null)
+                shader = Shader.Find("Unlit/Color");
+
+            s_translucentMaterial = new Material(shader)
+            {
+                hideFlags = HideFlags.HideAndDontSave,
+                color = new Color(1f, 1f, 1f, 0.35f),
+            };
+            s_translucentMaterial.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+            s_translucentMaterial.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+            s_translucentMaterial.SetInt("_Cull", (int)UnityEngine.Rendering.CullMode.Off);
+            s_translucentMaterial.SetInt("_ZWrite", 0);
+            s_translucentMaterial.renderQueue = 3000;
+            return s_translucentMaterial;
+        }
+#endif
+    }
+}

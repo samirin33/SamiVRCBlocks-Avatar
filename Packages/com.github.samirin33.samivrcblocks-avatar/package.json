@@ -1,7 +1,7 @@
 {
   "name": "com.github.samirin33.samivrcblocks-avatar",
   "displayName": "SamiVRCBlocks-Avatar",
-  "version": "0.5.4",
+  "version": "0.6.0",
   "unity": "2022.3",
   "description": "SamiVRCBlocks-Avatar: NDMF/Modular Avatar based build-time components for VRChat Avatar 3.0.",
   "author": {

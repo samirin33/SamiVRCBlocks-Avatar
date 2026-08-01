@@ -97,6 +97,22 @@ namespace Samirin33.NDMF.Components
             }
         }
 
+        public static string GetParamName(syncParamSetting setting)
+        {
+            if (setting == null) return "Param";
+            return string.IsNullOrEmpty(setting.paramName)
+                ? $"Param_{setting.paramType}{setting.bitType}"
+                : setting.paramName;
+        }
+
+        /// <summary>
+        /// ビルド時に MA Parameters へ登録する同期用 Bool 名（1 bit = 1 Bool）。
+        /// </summary>
+        public static string GetSyncBoolParamName(string paramName, int bitIndex)
+        {
+            return $"SUM/HalfParam/{paramName}_Int/{bitIndex}";
+        }
+
         public static int GetIntRangeSpan(syncParamSetting setting)
         {
             return 1 << GetBitCount(setting);
