@@ -56,6 +56,21 @@ namespace Samirin33.NDMF.Components
         [Header("Target Transforms")]
         public TargetTransform[] targetTransforms;
 
+        /// <summary>スナップ直後のローカル姿勢が記録されているか。</summary>
+        public bool HasSnapLocalPose => _hasSnapLocalPose;
+
+        [SerializeField, HideInInspector]
+        private bool _hasSnapLocalPose;
+
+        [SerializeField, HideInInspector]
+        private Vector3 _snapLocalPosition;
+
+        [SerializeField, HideInInspector]
+        private Vector3 _snapLocalEulerAngles;
+
+        [SerializeField, HideInInspector]
+        private Vector3 _snapLocalScale = Vector3.one;
+
         [Tooltip("中心点の球を表示する")]
         public bool showSphere = true;
 
@@ -173,13 +188,14 @@ namespace Samirin33.NDMF.Components
         /// 自身を「Target − Offset」の姿勢へ移動する（Apply の逆変換）。
         /// Active 適用後も Target が動かない位置に自身を置く。
         /// </summary>
-        public void AlignSelfToTargetMinusOffset(int index)
+        public void AlignSelfToTargetMinusOffset(int index, bool recordUndo = true)
         {
             if (!TryGetEntry(index, out var entry)) return;
             if (entry.transform == transform) return;
 
 #if UNITY_EDITOR
-            Undo.RecordObject(transform, "Align TuningObject to Target - Offset");
+            if (recordUndo)
+                Undo.RecordObject(transform, "Align TuningObject to Target - Offset");
 #endif
             var target = entry.transform;
             var rotation = target.rotation * Quaternion.Inverse(Quaternion.Euler(entry.offsetRotation));
@@ -191,6 +207,8 @@ namespace Samirin33.NDMF.Components
             transform.position = target.position - transform.TransformVector(entry.offsetPosition);
 #if UNITY_EDITOR
             EditorUtility.SetDirty(transform);
+            if (PrefabUtility.IsPartOfPrefabInstance(transform))
+                PrefabUtility.RecordPrefabInstancePropertyModifications(transform);
 #endif
         }
 
@@ -211,6 +229,46 @@ namespace Samirin33.NDMF.Components
             entry.offsetScale = DivideScale(target.lossyScale, transform.lossyScale);
 #if UNITY_EDITOR
             EditorUtility.SetDirty(this);
+#endif
+        }
+
+        /// <summary>
+        /// 現在のローカル姿勢をスナップ基準として記録する。
+        /// </summary>
+        public void RecordSnapLocalPose(bool recordUndo = true)
+        {
+#if UNITY_EDITOR
+            if (recordUndo)
+                Undo.RecordObject(this, "Record TuningObject Snap Pose");
+#endif
+            _hasSnapLocalPose = true;
+            _snapLocalPosition = transform.localPosition;
+            _snapLocalEulerAngles = transform.localEulerAngles;
+            _snapLocalScale = transform.localScale;
+#if UNITY_EDITOR
+            EditorUtility.SetDirty(this);
+            if (PrefabUtility.IsPartOfPrefabInstance(this))
+                PrefabUtility.RecordPrefabInstancePropertyModifications(this);
+#endif
+        }
+
+        /// <summary>
+        /// 記録したスナップ時のローカル姿勢へ戻す。
+        /// </summary>
+        public void ResetToSnapLocalPose()
+        {
+            if (!_hasSnapLocalPose) return;
+
+#if UNITY_EDITOR
+            Undo.RecordObject(transform, "Reset TuningObject to Snap Pose");
+#endif
+            transform.localPosition = _snapLocalPosition;
+            transform.localEulerAngles = _snapLocalEulerAngles;
+            transform.localScale = _snapLocalScale;
+#if UNITY_EDITOR
+            EditorUtility.SetDirty(transform);
+            if (PrefabUtility.IsPartOfPrefabInstance(transform))
+                PrefabUtility.RecordPrefabInstancePropertyModifications(transform);
 #endif
         }
 
@@ -252,12 +310,13 @@ namespace Samirin33.NDMF.Components
 #if UNITY_EDITOR
         private static Material s_translucentMaterial;
 
-        private const double PlacementAlignDelaySeconds = 0.25;
-        private const double PlacementAlignGiveUpSeconds = 3.0;
-        private const int PlacementAlignMinFrames = 5;
+        private const double PlacementAlignDelaySeconds = 0.3;
+        private const double PlacementAlignGiveUpSeconds = 5.0;
+        private const int PlacementAlignMinFrames = 8;
 
+        /// <summary>シーン上で一度スナップ済みか。Prefab アセット上では常に false に保つ。</summary>
         [SerializeField, HideInInspector]
-        private bool _hasAlignedAfterPlacement;
+        private bool _placementSnapCompleted;
 
         private bool _waitingForPlacementAlign;
         private double _placementAlignStartTime;
@@ -267,7 +326,9 @@ namespace Samirin33.NDMF.Components
         {
             EditorApplication.update -= EditorUpdate;
             EditorApplication.update += EditorUpdate;
-            BeginPlacementAlignWait();
+
+            if (!_placementSnapCompleted)
+                BeginPlacementAlignWait();
         }
 
         private void OnDisable()
@@ -277,28 +338,54 @@ namespace Samirin33.NDMF.Components
 
         private void Reset()
         {
-            _hasAlignedAfterPlacement = false;
+            SchedulePlacementSnap();
+        }
+
+        private void OnValidate()
+        {
+            // Prefab アセットに「済」フラグが焼き付くと、以降の配置でスナップしなくなる
+            if (EditorUtility.IsPersistent(gameObject) || PrefabUtility.IsPartOfPrefabAsset(gameObject))
+            {
+                if (_placementSnapCompleted)
+                    _placementSnapCompleted = false;
+            }
+        }
+
+        /// <summary>
+        /// シーンへ配置されたときなど、強制的に配置スナップをやり直す。
+        /// </summary>
+        public void SchedulePlacementSnap()
+        {
+            if (Application.isPlaying) return;
+            if (EditorUtility.IsPersistent(gameObject) || PrefabUtility.IsPartOfPrefabAsset(gameObject))
+                return;
+
+            _placementSnapCompleted = false;
             BeginPlacementAlignWait();
+            EditorUtility.SetDirty(this);
         }
 
         private void BeginPlacementAlignWait()
         {
-            if (Application.isPlaying || _hasAlignedAfterPlacement) return;
-            if (EditorUtility.IsPersistent(gameObject)) return;
+            if (Application.isPlaying || _placementSnapCompleted) return;
+            if (EditorUtility.IsPersistent(gameObject) || PrefabUtility.IsPartOfPrefabAsset(gameObject))
+                return;
 
             _waitingForPlacementAlign = true;
             _placementAlignStartTime = EditorApplication.timeSinceStartup;
             _placementAlignFrames = 0;
+
+            EditorApplication.update -= EditorUpdate;
+            EditorApplication.update += EditorUpdate;
         }
 
         /// <summary>
-        /// シーン配置直後は Transform 参照や階層が未確定なことがあるため、
-        /// 短いディレイ後に targetTransforms[0] − Offset へ自身を合わせる。
-        /// 整列完了（または諦める）までは Active の Target 適用も行わない。
+        /// ディレイ後に targetTransforms[0] − Offset へ自身を合わせる。
+        /// 完了まで Active の Target 適用は行わない。
         /// </summary>
         private void TryAlignOnScenePlacement()
         {
-            if (!_waitingForPlacementAlign || _hasAlignedAfterPlacement || Application.isPlaying)
+            if (!_waitingForPlacementAlign || _placementSnapCompleted || Application.isPlaying)
                 return;
 
             _placementAlignFrames++;
@@ -310,18 +397,25 @@ namespace Samirin33.NDMF.Components
 
             if (TryGetEntry(0, out _))
             {
-                AlignSelfToTargetMinusOffset(0);
-                _hasAlignedAfterPlacement = true;
+                // 自動スナップでは Undo を使わない（EditorUpdate 中の Undo が姿勢を巻き戻すことがある）
+                AlignSelfToTargetMinusOffset(0, recordUndo: false);
+                RecordSnapLocalPose(recordUndo: false);
+                _placementSnapCompleted = true;
                 _waitingForPlacementAlign = false;
                 EditorUtility.SetDirty(this);
+                if (PrefabUtility.IsPartOfPrefabInstance(this))
+                    PrefabUtility.RecordPrefabInstancePropertyModifications(this);
+
+                if (active)
+                    ApplyToTargets();
                 return;
             }
 
-            // Target がまだ無い場合は待ち続ける。一定時間で諦めて Active 適用を許可する
+            // Target 未設定なら諦めて Active 適用を許可（完了扱いにしてループしない）
             if (elapsed >= PlacementAlignGiveUpSeconds)
             {
                 _waitingForPlacementAlign = false;
-                _hasAlignedAfterPlacement = true;
+                _placementSnapCompleted = true;
                 EditorUtility.SetDirty(this);
             }
         }
@@ -330,11 +424,9 @@ namespace Samirin33.NDMF.Components
         {
             if (this == null || Application.isPlaying) return;
 
-            // Active 適用より先に、ディレイ付きで配置時アライメントを行う
-            if (_waitingForPlacementAlign && !_hasAlignedAfterPlacement)
+            if (_waitingForPlacementAlign && !_placementSnapCompleted)
             {
                 TryAlignOnScenePlacement();
-                // 整列待ち中は Target を動かさない（先に Apply するとスナップ基準が壊れる）
                 if (_waitingForPlacementAlign)
                     return;
             }

@@ -52,7 +52,21 @@ namespace Samirin33.NDMF.Components.Editor
             {
                 serializedObject.Update();
 
+                var canResetToSnap = !serializedObject.isEditingMultipleObjects
+                    && target is TuningObject tuningForReset
+                    && tuningForReset.HasSnapLocalPose;
+                if (canResetToSnap)
+                {
+                    if (GUILayout.Button("最初の状態にリセット"))
+                    {
+                        serializedObject.ApplyModifiedProperties();
+                        ((TuningObject)target).ResetToSnapLocalPose();
+                        GUIUtility.ExitGUI();
+                    }
+                }
+
                 EditorGUILayout.PropertyField(_active, new GUIContent("Active"));
+
                 DrawTargetTransforms();
 
                 EditorGUILayout.Space(8);
