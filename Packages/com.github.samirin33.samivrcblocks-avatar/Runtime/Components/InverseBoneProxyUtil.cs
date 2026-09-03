@@ -1,3 +1,4 @@
+using System.Reflection;
 using nadena.dev.modular_avatar.core;
 using nadena.dev.ndmf.runtime;
 using UnityEngine;
@@ -9,6 +10,12 @@ namespace Samirin33.NDMF.Components
     /// </summary>
     public static class InverseBoneProxyUtil
     {
+        // MA 1.17 未満には ModularAvatarBoneProxy.matchScale がない
+        static readonly FieldInfo BoneProxyMatchScaleField =
+            typeof(ModularAvatarBoneProxy).GetField("matchScale", BindingFlags.Instance | BindingFlags.Public);
+
+        public static bool SupportsBoneProxyMatchScale => BoneProxyMatchScaleField != null;
+
         public static bool IsReferenceEmpty(AvatarObjectReference reference)
         {
             return reference == null || string.IsNullOrWhiteSpace(reference.referencePath);
@@ -59,7 +66,7 @@ namespace Samirin33.NDMF.Components
             created.attachmentMode = attachmentMode == BoneProxyAttachmentMode.Unset
                 ? BoneProxyAttachmentMode.AsChildAtRoot
                 : attachmentMode;
-            created.matchScale = matchScale;
+            TrySetBoneProxyMatchScale(created, matchScale);
 
             return created;
         }
@@ -110,6 +117,14 @@ namespace Samirin33.NDMF.Components
                 Vector3.one);
             var finalMat = transRotMat * parentMat * sourceMat;
             follower.localScale = finalMat.lossyScale;
+        }
+
+        static void TrySetBoneProxyMatchScale(ModularAvatarBoneProxy proxy, bool matchScale)
+        {
+            if (proxy == null || BoneProxyMatchScaleField == null)
+                return;
+
+            BoneProxyMatchScaleField.SetValue(proxy, matchScale);
         }
 
         static void SetBoneProxyTarget(ModularAvatarBoneProxy proxy, Transform targetTransform)

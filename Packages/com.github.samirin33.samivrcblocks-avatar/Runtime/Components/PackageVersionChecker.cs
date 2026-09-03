@@ -1,7 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using UnityEngine;
 using Samirin33.NDMF.Base;
+
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
 
 namespace Samirin33.NDMF.Components
 {
@@ -36,5 +41,47 @@ namespace Samirin33.NDMF.Components
 
             DestroyImmediate(this);
         }
+
+#if UNITY_EDITOR
+        private void OnValidate()
+        {
+            // プレイ中は不要（ビルド処理も含めてランタイムで動かない）
+            if (Application.isPlaying)
+                return;
+
+            // プレハブアセットや非永続オブジェクトでは確認しない
+            if (EditorUtility.IsPersistent(gameObject))
+                return;
+
+            if (!gameObject.scene.IsValid() || !gameObject.scene.isLoaded)
+                return;
+
+            // Editor 専用サービスを、ランタイム側から直接参照せず反射で呼ぶ
+            const string serviceTypeName = "Samirin33.NDMF.Components.Editor.PackageVersionCheckerService";
+            Type serviceType = null;
+            var assemblies = AppDomain.CurrentDomain.GetAssemblies();
+            for (var i = 0; i < assemblies.Length; i++)
+            {
+                serviceType = assemblies[i].GetType(serviceTypeName);
+                if (serviceType != null)
+                    break;
+            }
+
+            if (serviceType == null)
+                return;
+
+            var scheduleMethod = serviceType.GetMethod(
+                "ScheduleCheck",
+                BindingFlags.Public | BindingFlags.Static,
+                null,
+                new[] { typeof(PackageVersionChecker), typeof(bool) },
+                null);
+            if (scheduleMethod == null)
+                return;
+
+            // シーン配置・値変更時は即座に（ただしサービス側でデバウンス/セッション抑制あり）
+            scheduleMethod.Invoke(null, new object[] { this, true });
+        }
+#endif
     }
 }

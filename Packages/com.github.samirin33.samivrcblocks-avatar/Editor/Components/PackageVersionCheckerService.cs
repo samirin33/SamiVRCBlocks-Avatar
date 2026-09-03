@@ -22,7 +22,10 @@ namespace Samirin33.NDMF.Components.Editor
         private const string VpmManifestRelativePath = "Packages/vpm-manifest.json";
 
         private static readonly HashSet<int> PendingInstanceIds = new HashSet<int>();
+        private static readonly Dictionary<int, double> LastScheduledTimeByInstanceId = new Dictionary<int, double>();
+        private const double CheckDebounceSeconds = 2.0;
         private static bool _scheduled;
+        private static bool _pendingForceDialog;
 
         public sealed class Mismatch
         {
@@ -38,6 +41,16 @@ namespace Samirin33.NDMF.Components.Editor
             if (checker == null)
                 return;
 
+            var id = checker.GetInstanceID();
+            var now = EditorApplication.timeSinceStartup;
+            if (LastScheduledTimeByInstanceId.TryGetValue(id, out var last)
+                && now - last < CheckDebounceSeconds)
+            {
+                return;
+            }
+
+            LastScheduledTimeByInstanceId[id] = now;
+
             // 手動チェックは即時実行（delayCall だとダイアログが出ない／失われることがある）
             if (forceDialog && !EditorApplication.isCompiling && !EditorApplication.isUpdating)
             {
@@ -45,7 +58,10 @@ namespace Samirin33.NDMF.Components.Editor
                 return;
             }
 
-            PendingInstanceIds.Add(checker.GetInstanceID());
+            if (forceDialog)
+                _pendingForceDialog = true;
+
+            PendingInstanceIds.Add(id);
             if (_scheduled)
                 return;
 
@@ -81,8 +97,10 @@ namespace Samirin33.NDMF.Components.Editor
                 return;
             }
 
+            var forceDialog = _pendingForceDialog;
+            _pendingForceDialog = false;
             _scheduled = false;
-            ScheduleFlush(forceDialog: true);
+            ScheduleFlush(forceDialog);
         }
 
         private static void ScheduleFlush(bool forceDialog)
@@ -150,6 +168,9 @@ namespace Samirin33.NDMF.Components.Editor
             bool showSatisfiedDialog = false)
         {
             if (checker == null)
+                return;
+
+            if (EditorApplication.isPlayingOrWillChangePlaymode)
                 return;
 
             // プレハブアセット上の手動チェックも許可。自動チェックのみシーン内を要求。

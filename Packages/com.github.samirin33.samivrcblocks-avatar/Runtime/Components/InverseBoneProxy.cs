@@ -66,7 +66,7 @@ namespace Samirin33.NDMF.Components
                 found,
                 transform,
                 attachmentMode,
-                matchScale);
+                InverseBoneProxyUtil.SupportsBoneProxyMatchScale && matchScale);
         }
     }
 }

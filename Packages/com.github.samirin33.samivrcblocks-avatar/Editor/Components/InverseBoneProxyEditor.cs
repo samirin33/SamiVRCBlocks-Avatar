@@ -62,11 +62,30 @@ namespace Samirin33.NDMF.Components.Editor
                     ApplyPathString(newPath);
 
                 DrawAttachmentModePopup();
-                EditorGUILayout.PropertyField(_matchScale, new GUIContent("Match Scale"));
+                DrawMatchScaleField();
                 EditorGUILayout.PropertyField(_editorApplyTransform, new GUIContent("Editor Apply Transform"));
 
                 serializedObject.ApplyModifiedProperties();
             });
+        }
+
+        void DrawMatchScaleField()
+        {
+            if (_matchScale == null)
+                return;
+
+            if (InverseBoneProxyUtil.SupportsBoneProxyMatchScale)
+            {
+                EditorGUILayout.PropertyField(_matchScale, new GUIContent("Match Scale"));
+                return;
+            }
+
+            EditorGUI.BeginDisabledGroup(true);
+            EditorGUILayout.PropertyField(_matchScale, new GUIContent("Match Scale"));
+            EditorGUI.EndDisabledGroup();
+            DrawHelpBoxWithDefaultFont(
+                "現在の Modular Avatar の Bone Proxy には Match Scale がありません。この項目は無視されます。",
+                MessageType.Info);
         }
 
         void DrawAttachmentModePopup()
