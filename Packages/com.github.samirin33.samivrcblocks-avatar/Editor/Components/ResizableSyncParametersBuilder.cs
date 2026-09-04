@@ -644,12 +644,14 @@ namespace Samirin33.NDMF.Components.Editor
             if (setting.paramType == ResizableSyncParameters.ParamType.Int)
                 return (rangeMin, rangeMax, 0f, maxValue);
 
-            if (setting.divisionType == ResizableSyncParameters.DivisionType.Odd)
+            // 偶数分割: maxValue+1 等分のビン中心へ写像（端から半ステップ内側）
+            if (setting.divisionType == ResizableSyncParameters.DivisionType.Even)
             {
                 var step = (rangeMax - rangeMin) / (maxValue + 1f);
                 return (rangeMin + step * 0.5f, rangeMax - step * 0.5f, 0f, maxValue);
             }
 
+            // 奇数分割: 端点を含む線形写像
             return (rangeMin, rangeMax, 0f, maxValue);
         }
 
@@ -663,12 +665,14 @@ namespace Samirin33.NDMF.Components.Editor
             if (setting.paramType == ResizableSyncParameters.ParamType.Int)
                 return (rangeMin, rangeMax, 0f, maxValue);
 
-            if (setting.divisionType == ResizableSyncParameters.DivisionType.Odd)
+            // 偶数分割: maxValue+1 等分のビン中心へ写像（端から半ステップ内側）
+            if (setting.divisionType == ResizableSyncParameters.DivisionType.Even)
             {
                 var step = (rangeMax - rangeMin) / (maxValue + 1f);
                 return (rangeMin + step * 0.5f, rangeMax - step * 0.5f, 0f, maxValue);
             }
 
+            // 奇数分割: 端点を含む線形写像
             return (rangeMin, rangeMax, 0f, maxValue);
         }
 

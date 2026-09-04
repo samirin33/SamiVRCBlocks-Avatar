@@ -369,9 +369,11 @@ namespace Samirin33.NDMF.Components.Editor
             switch ((ResizableSyncParameters.FloatRangePreset)floatRangePresetProp.enumValueIndex)
             {
                 case ResizableSyncParameters.FloatRangePreset.ZeroToPlusOne:
+                case ResizableSyncParameters.FloatRangePreset.Custom:
                     divisionTypeProp.enumValueIndex = (int)ResizableSyncParameters.DivisionType.Even;
                     break;
                 case ResizableSyncParameters.FloatRangePreset.MinusOneToPlusOne:
+                    // 0 を表現しやすくするため奇数分割
                     divisionTypeProp.enumValueIndex = (int)ResizableSyncParameters.DivisionType.Odd;
                     break;
             }
@@ -436,7 +438,8 @@ namespace Samirin33.NDMF.Components.Editor
         private static float GetResolution(float rangeMin, float rangeMax, int maxValue, ResizableSyncParameters.DivisionType divisionType)
         {
             var range = rangeMax - rangeMin;
-            return divisionType == ResizableSyncParameters.DivisionType.Odd
+            // 偶数分割: maxValue+1 等分 / 奇数分割: maxValue 等分
+            return divisionType == ResizableSyncParameters.DivisionType.Even
                 ? range / (maxValue + 1f)
                 : range / maxValue;
         }

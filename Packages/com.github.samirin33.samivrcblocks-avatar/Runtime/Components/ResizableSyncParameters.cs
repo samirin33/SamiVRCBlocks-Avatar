@@ -56,10 +56,12 @@ namespace Samirin33.NDMF.Components
 
         public enum DivisionType
         {
-            [InspectorName("偶数分割")]
-            Even,
+            /// <summary>範囲を maxValue 等分（端点含む）。分割数は奇数（例: 4bit → 15）。</summary>
             [InspectorName("奇数分割")]
             Odd,
+            /// <summary>範囲を maxValue+1 等分（中心寄せ）。分割数は偶数（例: 4bit → 16）。</summary>
+            [InspectorName("偶数分割")]
+            Even,
         }
 
         public enum BitType
