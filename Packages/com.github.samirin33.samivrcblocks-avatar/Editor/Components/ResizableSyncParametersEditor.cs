@@ -358,7 +358,7 @@ namespace Samirin33.NDMF.Components.Editor
                     break;
             }
 
-            var floatResolution = GetResolution(rangeMin, rangeMax, maxValue, divisionType);
+            var floatResolution = GetResolution(rangeMin, rangeMax, maxValue);
             return $"{rangeMin}～{rangeMax}のFloatを同期できます。(分解能: {FormatResolution(floatResolution)}, {divisionLabel})";
         }
 
@@ -435,13 +435,11 @@ namespace Samirin33.NDMF.Components.Editor
             return (min, max);
         }
 
-        private static float GetResolution(float rangeMin, float rangeMax, int maxValue, ResizableSyncParameters.DivisionType divisionType)
+        private static float GetResolution(float rangeMin, float rangeMax, int maxValue)
         {
-            var range = rangeMax - rangeMin;
-            // 偶数分割: maxValue+1 等分 / 奇数分割: maxValue 等分
-            return divisionType == ResizableSyncParameters.DivisionType.Even
-                ? range / (maxValue + 1f)
-                : range / maxValue;
+            // 偶数: (max-min)/(2^bit-1) / 奇数: (max-min)/(2^bit-2)
+            if (maxValue <= 0) return rangeMax - rangeMin;
+            return (rangeMax - rangeMin) / maxValue;
         }
 
         private static string FormatResolution(float value)
@@ -456,7 +454,15 @@ namespace Samirin33.NDMF.Components.Editor
 
         private static int GetMaxValue(SerializedProperty element)
         {
-            return GetIntRangeSpan(element) - 1;
+            var fullMax = GetIntRangeSpan(element) - 1;
+            var paramType = (ResizableSyncParameters.ParamType)element.FindPropertyRelative("paramType").enumValueIndex;
+            if (paramType != ResizableSyncParameters.ParamType.Float)
+                return fullMax;
+
+            var divisionType = (ResizableSyncParameters.DivisionType)element.FindPropertyRelative("divisionType").enumValueIndex;
+            if (divisionType == ResizableSyncParameters.DivisionType.Odd)
+                return Mathf.Max(1, fullMax - 1); // 2^bit - 2
+            return fullMax; // 2^bit - 1
         }
     }
 }

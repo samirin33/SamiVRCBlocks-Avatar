@@ -336,7 +336,7 @@ namespace Samirin33.NDMF.Components.Editor
             {
                 var bitCount = GetBitCount(setting);
                 var paramName = ResizableSyncParameters.GetParamName(setting);
-                var maxValue = (1 << bitCount) - 1;
+                var maxValue = ResizableSyncParameters.GetMaxSyncValue(setting);
                 var isFloat = setting.paramType == ResizableSyncParameters.ParamType.Float;
                 var intParamName = $"{paramName}_Int";
 
@@ -412,64 +412,101 @@ namespace Samirin33.NDMF.Components.Editor
             rootSm.AddStateMachine(localSm, new Vector3(300, 120, 0));
             rootSm.AddStateMachine(remoteSm, new Vector3(300, 160, 0));
 
-            var localStates = new AnimatorState[maxValue + 1];
-            var remoteStates = new AnimatorState[maxValue + 1];
+            // AnyState 直遷移ではなく IsLocal ハブ → Local/Remote SM → brunch 経由
+            var isLocalState = rootSm.AddState("IsLocal", new Vector3(30, 160, 0));
+            isLocalState.motion = emptyMotion;
+            isLocalState.writeDefaultValues = writeDefault;
+            rootSm.defaultState = isLocalState;
+
+            var toLocalSm = isLocalState.AddTransition(localSm);
+            toLocalSm.hasExitTime = false;
+            toLocalSm.exitTime = 1f;
+            toLocalSm.duration = 0f;
+            toLocalSm.canTransitionToSelf = true;
+            toLocalSm.AddCondition(AnimatorConditionMode.If, 0, "IsLocal");
+
+            var toRemoteSm = isLocalState.AddTransition(remoteSm);
+            toRemoteSm.hasExitTime = false;
+            toRemoteSm.exitTime = 1f;
+            toRemoteSm.duration = 0f;
+            toRemoteSm.canTransitionToSelf = true;
+            toRemoteSm.AddCondition(AnimatorConditionMode.IfNot, 0, "IsLocal");
+
+            var localBrunch = localSm.AddState("brunch", new Vector3(30, 180, 0));
+            localBrunch.motion = emptyMotion;
+            localBrunch.writeDefaultValues = writeDefault;
+            localSm.defaultState = localBrunch;
+
+            var remoteBrunch = remoteSm.AddState("brunch", new Vector3(30, 160, 0));
+            remoteBrunch.motion = emptyMotion;
+            remoteBrunch.writeDefaultValues = writeDefault;
+            remoteSm.defaultState = remoteBrunch;
 
             for (int value = 0; value <= maxValue; value++)
             {
                 var localState = localSm.AddState($"Binary {value}", new Vector3(300, 120 + value * 40, 0));
                 localState.motion = emptyMotion;
                 localState.writeDefaultValues = writeDefault;
-                localStates[value] = localState;
 
                 var remoteState = remoteSm.AddState($"Binary {value}", new Vector3(300, 120 + value * 40, 0));
                 remoteState.motion = emptyMotion;
                 remoteState.writeDefaultValues = writeDefault;
-                remoteStates[value] = remoteState;
-            }
 
-            localSm.defaultState = localStates[0];
-            remoteSm.defaultState = remoteStates[0];
-            rootSm.defaultState = localStates[0];
-
-            for (int value = 0; value <= maxValue; value++)
-            {
-                var localTransition = rootSm.AddAnyStateTransition(localStates[value]);
-                localTransition.hasExitTime = false;
-                localTransition.exitTime = 0f;
-                localTransition.duration = 0f;
-                localTransition.canTransitionToSelf = false;
-                localTransition.AddCondition(AnimatorConditionMode.If, 0, "IsLocal");
+                // Local: brunch → Binary（Int 条件）
+                var localIn = localBrunch.AddTransition(localState);
+                localIn.hasExitTime = false;
+                localIn.exitTime = 0f;
+                localIn.duration = 0f;
+                localIn.canTransitionToSelf = true;
                 if (value == 0)
-                    localTransition.AddCondition(AnimatorConditionMode.Less, 1, paramName);  // paramName < 1
+                    localIn.AddCondition(AnimatorConditionMode.Less, 1, paramName);
                 else if (value == maxValue)
-                    localTransition.AddCondition(AnimatorConditionMode.Greater, maxValue - 1, paramName);  // paramName > maxValue-1
+                    localIn.AddCondition(AnimatorConditionMode.Greater, maxValue - 1, paramName);
                 else
-                    localTransition.AddCondition(AnimatorConditionMode.Equals, value, paramName);
+                    localIn.AddCondition(AnimatorConditionMode.Equals, value, paramName);
 
-                var remoteTransition = rootSm.AddAnyStateTransition(remoteStates[value]);
-                remoteTransition.hasExitTime = false;
-                remoteTransition.exitTime = 0f;
-                remoteTransition.duration = 0f;
-                remoteTransition.canTransitionToSelf = false;
-                remoteTransition.AddCondition(AnimatorConditionMode.IfNot, 0, "IsLocal");
+                // Local: Binary → brunch（値が変わったら戻る）
+                var localOut = localState.AddTransition(localBrunch);
+                localOut.hasExitTime = false;
+                localOut.exitTime = 0f;
+                localOut.duration = 0f;
+                localOut.canTransitionToSelf = true;
+                if (value == 0)
+                    localOut.AddCondition(AnimatorConditionMode.Greater, 0, paramName);
+                else if (value == maxValue)
+                    localOut.AddCondition(AnimatorConditionMode.Less, maxValue, paramName);
+                else
+                    localOut.AddCondition(AnimatorConditionMode.NotEqual, value, paramName);
+
+                // Remote: brunch → Binary（同期 Bool が value なのに Int が違うとき）
+                var remoteIn = remoteBrunch.AddTransition(remoteState);
+                remoteIn.hasExitTime = false;
+                remoteIn.exitTime = 0f;
+                remoteIn.duration = 0f;
+                remoteIn.canTransitionToSelf = true;
+                remoteIn.AddCondition(AnimatorConditionMode.NotEqual, value, paramName);
                 for (int b = 0; b < bitCount; b++)
                 {
-                    // paramName は呼び出し側から渡される int パラメータ名（{名前}_Int）
                     var syncParamName = $"SUM/ResizableSync/{paramName}/{b}";
                     var boolVal = ((value >> b) & 1) != 0;
-                    remoteTransition.AddCondition(boolVal ? AnimatorConditionMode.If : AnimatorConditionMode.IfNot, 0, syncParamName);
+                    remoteIn.AddCondition(boolVal ? AnimatorConditionMode.If : AnimatorConditionMode.IfNot, 0, syncParamName);
                 }
+
+                // Remote: Binary → brunch（dummy=true で Driver 適用直後に戻る）
+                var remoteOut = remoteState.AddTransition(remoteBrunch);
+                remoteOut.hasExitTime = false;
+                remoteOut.exitTime = 1f;
+                remoteOut.duration = 0f;
+                remoteOut.canTransitionToSelf = true;
+                remoteOut.AddCondition(AnimatorConditionMode.If, 0, "dummy");
             }
 
-            var layer = new AnimatorControllerLayer
+            return new AnimatorControllerLayer
             {
                 name = layerName,
                 defaultWeight = 1f,
                 stateMachine = rootSm
             };
-
-            return layer;
         }
 
         private static AnimatorControllerLayer CreateRangeConvertLayer(ResizableSyncParameters.SyncParamSetting[] settings, bool writeDefault)
@@ -543,8 +580,7 @@ namespace Samirin33.NDMF.Components.Editor
                     {
                         foreach (var setting in settings)
                         {
-                            var bitCount = GetBitCount(setting);
-                            var maxValue = (1 << bitCount) - 1;
+                            var maxValue = ResizableSyncParameters.GetMaxSyncValue(setting);
                             var paramName = GetParamName(setting);
                             var intParamName = $"{paramName}_Int";
                             var (inputMin, inputMax, syncMin, syncMax) = GetInputToSyncRanges(setting, maxValue);
@@ -566,11 +602,9 @@ namespace Samirin33.NDMF.Components.Editor
                     {
                         foreach (var setting in settings)
                         {
-                            var bitCount = GetBitCount(setting);
-                            var maxValue = (1 << bitCount) - 1;
+                            var maxValue = ResizableSyncParameters.GetMaxSyncValue(setting);
                             var paramName = GetParamName(setting);
                             var intParamName = $"{paramName}_Int";
-                            var (outputMin, outputMax) = GetSourceRange(setting);
                             var (destMin, destMax, sourceMin, sourceMax) = GetSyncToOutputRanges(setting, maxValue);
 
                             var behaviour = state.state.AddStateMachineBehaviour(paramDriverType);
@@ -580,12 +614,13 @@ namespace Samirin33.NDMF.Components.Editor
 
                             if (setting.paramType == ResizableSyncParameters.ParamType.Float)
                             {
+                                // Int → 指定 min/max の Float（_Snapped / 本体）
                                 SetParamDriverCopy(behaviour, intParamName, $"{paramName}_Snapped", sourceMin, sourceMax, destMin, destMax, clearFirst: true);
-                                SetParamDriverCopy(behaviour, $"{paramName}_Snapped", paramName, destMin, destMax, outputMin, outputMax, clearFirst: false);
+                                SetParamDriverCopy(behaviour, $"{paramName}_Snapped", paramName, destMin, destMax, destMin, destMax, clearFirst: false);
                             }
                             else
                             {
-                                SetParamDriverCopy(behaviour, intParamName, paramName, sourceMin, sourceMax, outputMin, outputMax, clearFirst: true);
+                                SetParamDriverCopy(behaviour, intParamName, paramName, sourceMin, sourceMax, destMin, destMax, clearFirst: true);
                             }
                         }
                     }
@@ -636,43 +671,28 @@ namespace Samirin33.NDMF.Components.Editor
 
         /// <summary>
         /// ユーザー入力レンジから同期用 Int レンジへの変換範囲。
+        /// Float は Driver の切り捨てを丸め込み相当にするため、source を分解能/2 だけ負方向へオフセットする。
         /// </summary>
         private static (float inputMin, float inputMax, float syncMin, float syncMax) GetInputToSyncRanges(
             ResizableSyncParameters.SyncParamSetting setting, int maxValue)
         {
             var (rangeMin, rangeMax) = GetSourceRange(setting);
-            if (setting.paramType == ResizableSyncParameters.ParamType.Int)
+            if (setting.paramType != ResizableSyncParameters.ParamType.Float || maxValue <= 0)
                 return (rangeMin, rangeMax, 0f, maxValue);
 
-            // 偶数分割: maxValue+1 等分のビン中心へ写像（端から半ステップ内側）
-            if (setting.divisionType == ResizableSyncParameters.DivisionType.Even)
-            {
-                var step = (rangeMax - rangeMin) / (maxValue + 1f);
-                return (rangeMin + step * 0.5f, rangeMax - step * 0.5f, 0f, maxValue);
-            }
-
-            // 奇数分割: 端点を含む線形写像
-            return (rangeMin, rangeMax, 0f, maxValue);
+            // floor(map(f) + 0.5) ≈ round(map(f))
+            // ⇒ sourceMin/Max を分解能/2 だけ下げる
+            var halfStep = (rangeMax - rangeMin) / maxValue * 0.5f;
+            return (rangeMin - halfStep, rangeMax - halfStep, 0f, maxValue);
         }
 
         /// <summary>
-        /// 同期用 Int レンジから出力レンジへの変換範囲。
+        /// 同期用 Int レンジから出力レンジへの変換範囲（端点を含む線形復元）。
         /// </summary>
         private static (float destMin, float destMax, float sourceMin, float sourceMax) GetSyncToOutputRanges(
             ResizableSyncParameters.SyncParamSetting setting, int maxValue)
         {
             var (rangeMin, rangeMax) = GetSourceRange(setting);
-            if (setting.paramType == ResizableSyncParameters.ParamType.Int)
-                return (rangeMin, rangeMax, 0f, maxValue);
-
-            // 偶数分割: maxValue+1 等分のビン中心へ写像（端から半ステップ内側）
-            if (setting.divisionType == ResizableSyncParameters.DivisionType.Even)
-            {
-                var step = (rangeMax - rangeMin) / (maxValue + 1f);
-                return (rangeMin + step * 0.5f, rangeMax - step * 0.5f, 0f, maxValue);
-            }
-
-            // 奇数分割: 端点を含む線形写像
             return (rangeMin, rangeMax, 0f, maxValue);
         }
 
@@ -724,24 +744,25 @@ namespace Samirin33.NDMF.Components.Editor
                 foreach (var childSm in layer.stateMachine.stateMachines)
                 {
                     var isLocal = childSm.stateMachine.name == "Local";
-                    var states = childSm.stateMachine.states;
 
-                    for (int i = 0; i < states.Length; i++)
+                    foreach (var childState in childSm.stateMachine.states)
                     {
-                        var value = i;
-                        var state = states[i].state;
+                        var state = childState.state;
+                        if (!state.name.StartsWith("Binary ", StringComparison.Ordinal))
+                            continue;
+                        if (!int.TryParse(state.name.Substring("Binary ".Length), out var value))
+                            continue;
 
                         var behaviour = state.AddStateMachineBehaviour(paramDriverType);
-                        if (behaviour != null)
-                        {
-                            EnsureSubAsset(behaviour, controller);
+                        if (behaviour == null) continue;
 
-                            var boolValues = new bool[bitCount];
-                            for (int b = 0; b < bitCount; b++)
-                                boolValues[b] = ((value >> b) & 1) != 0;
+                        EnsureSubAsset(behaviour, controller);
 
-                            SetParamDriverParameters(behaviour, paramName, value, boolValues, isLocal);
-                        }
+                        var boolValues = new bool[bitCount];
+                        for (int b = 0; b < bitCount; b++)
+                            boolValues[b] = ((value >> b) & 1) != 0;
+
+                        SetParamDriverParameters(behaviour, paramName, value, boolValues, isLocal);
                     }
                 }
             }

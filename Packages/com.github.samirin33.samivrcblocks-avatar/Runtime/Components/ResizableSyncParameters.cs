@@ -56,10 +56,16 @@ namespace Samirin33.NDMF.Components
 
         public enum DivisionType
         {
-            /// <summary>範囲を maxValue 等分（端点含む）。分割数は奇数（例: 4bit → 15）。</summary>
+            /// <summary>
+            /// 同期 Int は 0..(2^bit-2) を使用。分解能は (max-min)/(2^bit-2)。
+            /// 例: 0~1・2bit → Int 0~2、分解能 1/2。
+            /// </summary>
             [InspectorName("奇数分割")]
             Odd,
-            /// <summary>範囲を maxValue+1 等分（中心寄せ）。分割数は偶数（例: 4bit → 16）。</summary>
+            /// <summary>
+            /// 同期 Int は 0..(2^bit-1) を使用。分解能は (max-min)/(2^bit-1)。
+            /// 例: 0~1・2bit → Int 0~3、分解能 1/3。
+            /// </summary>
             [InspectorName("偶数分割")]
             Even,
         }
@@ -120,9 +126,19 @@ namespace Samirin33.NDMF.Components
             return 1 << GetBitCount(setting);
         }
 
+        /// <summary>
+        /// Float 同期で使う Int の最大値（0..max）。
+        /// 偶数分割: 2^bit-1 / 奇数分割: 2^bit-2（1bit 時は最低 1）。
+        /// Int 型は常に 2^bit-1。
+        /// </summary>
         public static int GetMaxSyncValue(SyncParamSetting setting)
         {
-            return GetIntRangeSpan(setting) - 1;
+            var fullMax = GetIntRangeSpan(setting) - 1;
+            if (setting == null || setting.paramType != ParamType.Float)
+                return fullMax;
+            if (setting.divisionType == DivisionType.Odd)
+                return Mathf.Max(1, fullMax - 1); // 2^bit - 2
+            return fullMax; // 2^bit - 1
         }
 
         public SyncParamSetting[] syncParamSettings;
