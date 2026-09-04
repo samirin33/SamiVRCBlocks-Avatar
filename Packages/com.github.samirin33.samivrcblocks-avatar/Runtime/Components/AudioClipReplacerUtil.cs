@@ -14,7 +14,7 @@ namespace Samirin33.NDMF.Components
 {
     public static class AudioClipReplacerUtil
     {
-        public const string GeneratedRoot = "Assets/Generated/SamirinVRCUtility/AudioClipReplacer";
+        public const string GeneratedRoot = "Assets/Generated/SamiVRCBlocks/AudioClipReplacer";
 
         public static bool TryProcess(
             AudioClipReplacer replacer,
@@ -808,8 +808,8 @@ namespace Samirin33.NDMF.Components
             if (!Directory.Exists("Assets/Generated"))
                 Directory.CreateDirectory("Assets/Generated");
 
-            if (!Directory.Exists("Assets/Generated/SamirinVRCUtility"))
-                Directory.CreateDirectory("Assets/Generated/SamirinVRCUtility");
+            if (!Directory.Exists("Assets/Generated/SamiVRCBlocks"))
+                Directory.CreateDirectory("Assets/Generated/SamiVRCBlocks");
 
             if (!Directory.Exists(GeneratedRoot))
                 Directory.CreateDirectory(GeneratedRoot);

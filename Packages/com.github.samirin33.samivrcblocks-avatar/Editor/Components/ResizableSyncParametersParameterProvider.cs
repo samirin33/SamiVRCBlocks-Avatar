@@ -9,15 +9,15 @@ using Samirin33.NDMF.Components;
 namespace Samirin33.NDMF.Components.Editor
 {
     /// <summary>
-    /// HalfSyncParam の指定 bit 数を MA Information の同期パラメーター使用量として報告する。
-    /// ビルド時に登録される Bool（SUM/HalfParam/...）と同じ名前・型で提供し、二重カウントを避ける。
+    /// ResizableSyncParameters の指定 bit 数を MA Information の同期パラメーター使用量として報告する。
+    /// ビルド時に登録される Bool（SUM/ResizableSync/...）と同じ名前・型で提供し、二重カウントを避ける。
     /// </summary>
-    [ParameterProviderFor(typeof(HalfSyncParam))]
-    internal class HalfSyncParamParameterProvider : IParameterProvider
+    [ParameterProviderFor(typeof(ResizableSyncParameters))]
+    internal class ResizableSyncParametersParameterProvider : IParameterProvider
     {
-        private readonly HalfSyncParam _component;
+        private readonly ResizableSyncParameters _component;
 
-        public HalfSyncParamParameterProvider(HalfSyncParam component)
+        public ResizableSyncParametersParameterProvider(ResizableSyncParameters component)
         {
             _component = component;
         }
@@ -33,16 +33,16 @@ namespace Samirin33.NDMF.Components.Editor
             {
                 if (setting == null) continue;
 
-                var bitCount = HalfSyncParam.GetBitCount(setting);
+                var bitCount = ResizableSyncParameters.GetBitCount(setting);
                 if (bitCount < 1) continue;
 
-                var paramName = HalfSyncParam.GetParamName(setting);
+                var paramName = ResizableSyncParameters.GetParamName(setting);
                 if (!seenNames.Add(paramName))
                     continue;
 
                 for (var i = 0; i < bitCount; i++)
                 {
-                    var syncParamName = HalfSyncParam.GetSyncBoolParamName(paramName, i);
+                    var syncParamName = ResizableSyncParameters.GetSyncBoolParamName(paramName, i);
                     yield return new ProvidedParameter(
                         syncParamName,
                         ParameterNamespace.Animator,

@@ -18,7 +18,7 @@ namespace Samirin33.NDMF.Components
             public float smoothWeight;
             /// <summary>
             /// 空の場合は parameterName + "_Smoothed" を使用。
-            /// HalfSyncParam 連携時は元パラメータ名の _Smoothed を指定する。
+            /// ResizableSyncParameters 連携時は元パラメータ名の _Smoothed を指定する。
             /// </summary>
             public string smoothedParameterName;
 
@@ -35,10 +35,20 @@ namespace Samirin33.NDMF.Components
 
         public override void OnBuildSingle(SamirinBuildPhase buildPhase, bool beforeModularAvatar, SamirinMABaseSingle[] _MAScripts, GameObject avatarRootObject, Action<GameObject, SamirinMABaseSingle[]> invokeBuilder, Action<GameObject, SamirinMABaseSingle[]> invokeReplaceBuilder)
         {
-            if (buildPhase == SamirinBuildPhase.Resolving && beforeModularAvatar)
+            // Resolving: アバター上に直接置かれたもの
+            // Transforming: ExtendedParameters が配置したプレファブ内のもの（ExtendedParameters より後のフェーズ）
+            if ((buildPhase != SamirinBuildPhase.Resolving && buildPhase != SamirinBuildPhase.Transforming)
+                || !beforeModularAvatar)
+                return;
+
+            invokeBuilder(avatarRootObject, _MAScripts);
+
+            // 同一タイプは OnBuildSingle が代表1件にしか来ないため、渡された全インスタンスを破棄する
+            if (_MAScripts == null) return;
+            foreach (var script in _MAScripts)
             {
-                invokeBuilder(avatarRootObject, _MAScripts);
-                DestroyImmediate(this);
+                if (script != null)
+                    DestroyImmediate(script);
             }
         }
     }

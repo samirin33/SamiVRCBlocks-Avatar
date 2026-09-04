@@ -10,6 +10,7 @@ namespace Samirin33.NDMF.Components.Editor
     public class TuningObjectEditor : SamirinMABaseEditor
     {
         private SerializedProperty _active;
+        private SerializedProperty _previewParticles;
         private SerializedProperty _targetTransforms;
         private SerializedProperty _showSphere;
         private SerializedProperty _sphereRadius;
@@ -29,6 +30,7 @@ namespace Samirin33.NDMF.Components.Editor
         private void OnEnable()
         {
             _active = serializedObject.FindProperty(nameof(TuningObject.active));
+            _previewParticles = serializedObject.FindProperty(nameof(TuningObject.previewParticles));
             _targetTransforms = serializedObject.FindProperty(nameof(TuningObject.targetTransforms));
             _showSphere = serializedObject.FindProperty(nameof(TuningObject.showSphere));
             _sphereRadius = serializedObject.FindProperty(nameof(TuningObject.sphereRadius));
@@ -52,20 +54,24 @@ namespace Samirin33.NDMF.Components.Editor
             {
                 serializedObject.Update();
 
-                var canResetToSnap = !serializedObject.isEditingMultipleObjects
-                    && target is TuningObject tuningForReset
-                    && tuningForReset.HasSnapLocalPose;
-                if (canResetToSnap)
+                var tuning = target as TuningObject;
+                var showResetButton = tuning != null && !serializedObject.isEditingMultipleObjects;
+
+                if (showResetButton)
                 {
-                    if (GUILayout.Button("最初の状態にリセット"))
+                    using (new EditorGUI.DisabledScope(!tuning.HasSnapLocalPose))
                     {
-                        serializedObject.ApplyModifiedProperties();
-                        ((TuningObject)target).ResetToSnapLocalPose();
-                        GUIUtility.ExitGUI();
+                        if (GUILayout.Button("最初の状態にリセット"))
+                        {
+                            serializedObject.ApplyModifiedProperties();
+                            tuning.ResetToSnapLocalPose();
+                            GUIUtility.ExitGUI();
+                        }
                     }
                 }
 
                 EditorGUILayout.PropertyField(_active, new GUIContent("Active"));
+                EditorGUILayout.PropertyField(_previewParticles, new GUIContent("Preview Particles", "TuningObject 自身の選択中のみ、Target 配下の ParticleSystem をプレビューします"));
 
                 DrawTargetTransforms();
 
@@ -77,6 +83,16 @@ namespace Samirin33.NDMF.Components.Editor
                 DrawLabelSection();
                 EditorGUILayout.Space(4);
                 DrawMeshSection();
+
+                if (showResetButton)
+                {
+                    if (GUILayout.Button("最初の状態を更新"))
+                    {
+                        serializedObject.ApplyModifiedProperties();
+                        tuning.RecordSnapLocalPose();
+                        serializedObject.Update();
+                    }
+                }
 
                 serializedObject.ApplyModifiedProperties();
             });

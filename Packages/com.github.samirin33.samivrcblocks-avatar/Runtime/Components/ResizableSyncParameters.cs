@@ -4,8 +4,8 @@ using Samirin33.NDMF.Base;
 
 namespace Samirin33.NDMF.Components
 {
-    [AddComponentMenu("SamiVRCBlocks-Avatar/SB HalfSyncParam")]
-    public class HalfSyncParam : SamirinMABaseSingle
+    [AddComponentMenu("SamiVRCBlocks-Avatar/SB ResizableSyncParameters")]
+    public class ResizableSyncParameters : SamirinMABaseSingle
     {
         private void Reset()
         {
@@ -13,7 +13,7 @@ namespace Samirin33.NDMF.Components
         }
 
         [System.Serializable]
-        public class syncParamSetting
+        public class SyncParamSetting
         {
             public string paramName;
             public ParamType paramType;
@@ -78,7 +78,7 @@ namespace Samirin33.NDMF.Components
         public const int MinCustomBitCount = 1;
         public const int MaxCustomBitCount = 16;
 
-        public static int GetBitCount(syncParamSetting setting)
+        public static int GetBitCount(SyncParamSetting setting)
         {
             if (setting == null) return MinCustomBitCount;
             if (setting.bitType == BitType.Custom)
@@ -97,7 +97,7 @@ namespace Samirin33.NDMF.Components
             }
         }
 
-        public static string GetParamName(syncParamSetting setting)
+        public static string GetParamName(SyncParamSetting setting)
         {
             if (setting == null) return "Param";
             return string.IsNullOrEmpty(setting.paramName)
@@ -110,20 +110,20 @@ namespace Samirin33.NDMF.Components
         /// </summary>
         public static string GetSyncBoolParamName(string paramName, int bitIndex)
         {
-            return $"SUM/HalfParam/{paramName}_Int/{bitIndex}";
+            return $"SUM/ResizableSync/{paramName}_Int/{bitIndex}";
         }
 
-        public static int GetIntRangeSpan(syncParamSetting setting)
+        public static int GetIntRangeSpan(SyncParamSetting setting)
         {
             return 1 << GetBitCount(setting);
         }
 
-        public static int GetMaxSyncValue(syncParamSetting setting)
+        public static int GetMaxSyncValue(SyncParamSetting setting)
         {
             return GetIntRangeSpan(setting) - 1;
         }
 
-        public syncParamSetting[] syncParamSettings;
+        public SyncParamSetting[] syncParamSettings;
 
         public bool writeDefault = false;
 

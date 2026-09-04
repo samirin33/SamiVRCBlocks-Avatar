@@ -14,11 +14,11 @@ namespace Samirin33.NDMF.Components
     {
         private const string WorldPrefabGUID = "b68724081431dfe428986a441453c12b";
 
-        public bool fixPosition = true;
+        public bool fixPosition = false;
         public bool positionX = true, positionY = true, positionZ = true;
-        public bool fixRotation = true;
+        public bool fixRotation = false;
         public bool rotationX = true, rotationY = true, rotationZ = true;
-        public bool fixScale = true;
+        public bool fixScale = false;
         public bool scaleX = true, scaleY = true, scaleZ = true;
         public bool editorApply = true;
 

@@ -1,4 +1,4 @@
-# HalfSyncParam
+# ResizableSyncParameters
 
 ## 概要
 
@@ -7,14 +7,14 @@ Int / Float どちらも扱え、Float ではスナップ後の値とスムー�
 
 ## 追加方法
 
-- **Add Component** → **SamiVRCBlocks-Avatar** → **SB HalfSyncParam**
+- **Add Component** → **SamiVRCBlocks-Avatar** → **SB ResizableSyncParameters**
 - アバター配下の任意の GameObject に追加できます（複数可。同名パラメータは先勝ちでマージされます）
 
 ## 使い方
 
 ### 基本手順
 
-1. HalfSyncParam をアタッチした GameObject を選択
+1. ResizableSyncParameters をアタッチした GameObject を選択
 2. **同期パラメータ設定** で **+ 追加** する
 3. 各要素で次を指定する
    - **パラメータ名**（空の場合は `Param_{型}{ビット}` が自動生成）
@@ -45,23 +45,23 @@ Int / Float どちらも扱え、Float ではスナップ後の値とスムー�
 
 ## ビルド時の挙動
 
-1. **Resolving**（Modular Avatar より前）: HalfSync 用 AnimatorController を生成し、MA Merge Animator / Parameters として登録。Float は ParameterSmoothing も構築
+1. **Resolving**（Modular Avatar より前）: ResizableSync 用 AnimatorController を生成し、MA Merge Animator / Parameters として登録。Float は ParameterSmoothing も構築
 2. **Optimizing**（Modular Avatar より前）: `replaceWithSmoothedInAnimator` が有効なら FX コントローラ内の Float 参照を `_Smoothed` に置換し、コンポーネントを削除
 
 生成・同期に関わる主なパラメータ例:
 
 - `{名前}` … ローカルで扱う元の Int / Float
 - `{名前}_Int` … Bit 分解用の内部 Int
-- `SUM/HalfParam/{名前}_Int/{i}` … 同期用 Bool（Bit 数ぶん）
+- `SUM/ResizableSync/{名前}_Int/{i}` … 同期用 Bool（Bit 数ぶん）
 - Float のみ: `{名前}_Snapped`（分解能にスナップした値）、`{名前}_Smoothed`（スムージング後）
 
 ## 注意事項
 
 - スムージングは [AAP](https://vrc.school/docs/Other/AAPs/) で行われます。スムージング後の値は **VRC Parameter Driver では取得できません**
 - Remote 側で見える結果は、Float では `_Snapped` / `_Smoothed` 側に一致します
-- 同名パラメータを複数の HalfSyncParam に書くと、先に見つかった設定だけが使われます
+- 同名パラメータを複数の ResizableSyncParameters に書くと、先に見つかった設定だけが使われます
 
 ## 関連
 
-- [ParameterSmoothing](04-parameter-smoothing.md) — Float のスムージング（HalfSyncParam から自動利用）
-- [ModuleSetter](05-module-setter.md) — ParameterSmoothing が FPSCounter を登録する先
+- [ParameterSmoothing](04-parameter-smoothing.md) — Float のスムージング（ResizableSyncParameters から自動利用）
+- [ExtendedParameters](05-extended-parameters.md) — ParameterSmoothing が FPSCounter を登録する先

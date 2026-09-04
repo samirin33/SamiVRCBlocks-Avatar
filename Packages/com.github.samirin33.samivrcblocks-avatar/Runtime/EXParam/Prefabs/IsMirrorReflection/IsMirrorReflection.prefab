@@ -13,7 +13,7 @@ GameObject:
   - component: {fileID: 6257506701353824125}
   - component: {fileID: 7082380078851296378}
   m_Layer: 10
-  m_Name: IsMirrorRefrection
+  m_Name: IsMirrorReflection
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -67,6 +67,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 1bb122659f724ebf85fe095ac02dc339, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  _modularAvatarVersionTag:
+    UpdatedAtVersion: 
+    MinimumVersion: 
   animator: {fileID: 9100000, guid: d17bd9aae4dae054fa0601855e7fbc0f, type: 2}
   layerType: 5
   deleteAttachedAnimator: 1
@@ -91,10 +94,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   animator: {fileID: 6116041941638974219}
   paramInfos:
-  - paramName: IsMirrorRefrection
+  - paramName: IsMirrorReflection
     paramType: 1
     paramExplanation: "\u5024\u304C-1\u306E\u6642 = \u5224\u5B9A\u6E96\u5099\u4E2D\n\u5024\u304C0\u306E\u6642
-      = Animator\u304CPlayerLocal\u30EC\u30A4\u30E4\u30FC\u306B\u3042\u308B\n\u5024\u304C1\u306E\u6642
+      = Animator\u304CPlayerLocal\u30EC\u30A4\u30E4\u30FC\u306B\u3042\u308B(\u3082\u3057\u304F\u306FRemote\u74B0\u5883)\n\u5024\u304C1\u306E\u6642
       = Animator\u304CMirrorRefrection\u30EC\u30A4\u30E4\u30FC\u306B\u3042\u308B"
     defaultFloat: -1
     defaultInt: 0

@@ -94,30 +94,36 @@ namespace Samirin33.NDMF.Base.Plugin
 
         private static void InvokeOnBuild(SamirinMABase[] scripts, BuildPhase buildPhase, bool beforeModularAvatar, GameObject avatarRootObject)
         {
-            var processedSingleTypes = new HashSet<Type>();
+            // 型単位ではなくインスタンス単位。ExtendedParameters 等が後から追加した
+            // SamirinMABaseSingle も同一フェーズ内で再処理できるようにする。
+            var processedSingleIds = new HashSet<int>();
             var processedOnBuildIds = new HashSet<int>();
 
             while (true)
             {
                 var currentScripts = avatarRootObject.GetComponentsInChildren<SamirinMABase>(true).ToArray();
                 var singleScripts = currentScripts.OfType<SamirinMABaseSingle>()
-                    .Where(s => !processedSingleTypes.Contains(s.GetType()))
+                    .Where(s => !processedSingleIds.Contains(s.GetInstanceID()))
                     .ToArray();
+                // Single は OnBuildSingle のみ。空の OnBuild を先に踏まない。
                 var scriptsPendingOnBuild = currentScripts
+                    .Where(s => !(s is SamirinMABaseSingle))
                     .Where(s => !processedOnBuildIds.Contains(s.GetInstanceID()))
                     .ToArray();
 
                 var workItems = new List<(int priority, int order, bool isSingleGroup, object payload)>();
 
                 foreach (var g in singleScripts.GroupBy(s => s.GetType()))
-                    workItems.Add((g.Min(s => s.priority), 0, true, g.Key));
+                    workItems.Add((g.Min(s => s.priority), 1, true, g.Key));
 
                 foreach (var s in scriptsPendingOnBuild)
-                    workItems.Add((s.priority, 1, false, s));
+                    workItems.Add((s.priority, 0, false, s));
 
                 if (workItems.Count == 0)
                     break;
 
+                // 同一 priority では通常 OnBuild（ExtendedParameters 等）を Single より先に実行し、
+                // プレファブ展開後のコンポーネントを取り込めるようにする。
                 workItems.Sort((a, b) => a.priority != b.priority ? a.priority.CompareTo(b.priority) : a.order.CompareTo(b.order));
                 var (_, _, isSingleGroup, payload) = workItems[0];
 
@@ -126,12 +132,14 @@ namespace Samirin33.NDMF.Base.Plugin
                 if (isSingleGroup)
                 {
                     var scriptType = (Type)payload;
-                    processedSingleTypes.Add(scriptType);
 
-                    var array = currentScripts.OfType<SamirinMABaseSingle>()
+                    var array = singleScripts
                         .Where(s => s.GetType() == scriptType)
                         .ToArray();
                     if (array.Length == 0) continue;
+
+                    foreach (var s in array)
+                        processedSingleIds.Add(s.GetInstanceID());
 
                     Action<GameObject, SamirinMABaseSingle[]> invokeBuilder = (root, s) =>
                         SamirinMABaseSingleBuildRegistry.Invoke(scriptType, root, s);

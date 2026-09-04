@@ -7,9 +7,9 @@ using Samirin33.NDMF.Components;
 
 namespace Samirin33.NDMF.Components.Editor
 {
-    [CustomEditor(typeof(HalfSyncParam))]
+    [CustomEditor(typeof(ResizableSyncParameters))]
     [CanEditMultipleObjects]
-    public class HalfSyncParamEditor : SamirinMABaseEditor
+    public class ResizableSyncParametersEditor : SamirinMABaseEditor
     {
         private SerializedProperty _syncParamSettings;
         private SerializedProperty _writeDefault;
@@ -91,20 +91,20 @@ namespace Samirin33.NDMF.Components.Editor
                         EditorGUILayout.PropertyField(paramTypeProp, new GUIContent("タイプ"));
                         var paramTypeChanged = EditorGUI.EndChangeCheck();
                         EditorGUILayout.PropertyField(bitTypeProp, new GUIContent("ビット数"));
-                        if ((HalfSyncParam.BitType)bitTypeProp.enumValueIndex == HalfSyncParam.BitType.Custom)
+                        if ((ResizableSyncParameters.BitType)bitTypeProp.enumValueIndex == ResizableSyncParameters.BitType.Custom)
                         {
                             customBitCountProp.intValue = EditorGUILayout.IntSlider(
                                 "カスタムBit数",
                                 customBitCountProp.intValue,
-                                HalfSyncParam.MinCustomBitCount,
-                                HalfSyncParam.MaxCustomBitCount);
+                                ResizableSyncParameters.MinCustomBitCount,
+                                ResizableSyncParameters.MaxCustomBitCount);
                         }
 
-                        var paramType = (HalfSyncParam.ParamType)paramTypeProp.enumValueIndex;
-                        if (paramType == HalfSyncParam.ParamType.Int)
+                        var paramType = (ResizableSyncParameters.ParamType)paramTypeProp.enumValueIndex;
+                        if (paramType == ResizableSyncParameters.ParamType.Int)
                         {
                             EditorGUILayout.PropertyField(intRangePresetProp, new GUIContent("Int範囲"));
-                            if ((HalfSyncParam.IntRangePreset)intRangePresetProp.enumValueIndex == HalfSyncParam.IntRangePreset.Custom)
+                            if ((ResizableSyncParameters.IntRangePreset)intRangePresetProp.enumValueIndex == ResizableSyncParameters.IntRangePreset.Custom)
                             {
                                 DrawIntCustomMin(customIntMinProp, element);
                             }
@@ -119,7 +119,7 @@ namespace Samirin33.NDMF.Components.Editor
                             if (paramTypeChanged)
                                 ApplyDefaultDivisionForFloatRange(floatRangePresetProp, divisionTypeProp);
 
-                            if ((HalfSyncParam.FloatRangePreset)floatRangePresetProp.enumValueIndex == HalfSyncParam.FloatRangePreset.Custom)
+                            if ((ResizableSyncParameters.FloatRangePreset)floatRangePresetProp.enumValueIndex == ResizableSyncParameters.FloatRangePreset.Custom)
                             {
                                 DrawCustomFloatRange(customFloatMinProp, customFloatMaxProp);
                             }
@@ -132,7 +132,7 @@ namespace Samirin33.NDMF.Components.Editor
                         if (!string.IsNullOrEmpty(description))
                             EditorGUILayout.HelpBox(description, MessageType.None);
 
-                        if (paramType == HalfSyncParam.ParamType.Float)
+                        if (paramType == ResizableSyncParameters.ParamType.Float)
                         {
                             var paramName = paramNameProp.stringValue;
                             if (string.IsNullOrEmpty(paramName))
@@ -167,16 +167,16 @@ namespace Samirin33.NDMF.Components.Editor
                         var newElement = _syncParamSettings.GetArrayElementAtIndex(_syncParamSettings.arraySize - 1);
                         var bitTypeProp = newElement.FindPropertyRelative("bitType");
                         if (bitTypeProp != null)
-                            bitTypeProp.enumValueIndex = (int)HalfSyncParam.BitType._4bit;
+                            bitTypeProp.enumValueIndex = (int)ResizableSyncParameters.BitType._4bit;
                         var smoothWeightPropNew = newElement.FindPropertyRelative("smoothWeight");
                         if (smoothWeightPropNew != null)
                             smoothWeightPropNew.floatValue = 0.2f;
                         var intRangePresetPropNew = newElement.FindPropertyRelative("intRangePreset");
                         if (intRangePresetPropNew != null)
-                            intRangePresetPropNew.enumValueIndex = (int)HalfSyncParam.IntRangePreset.FromZero;
+                            intRangePresetPropNew.enumValueIndex = (int)ResizableSyncParameters.IntRangePreset.FromZero;
                         var floatRangePresetPropNew = newElement.FindPropertyRelative("floatRangePreset");
                         if (floatRangePresetPropNew != null)
-                            floatRangePresetPropNew.enumValueIndex = (int)HalfSyncParam.FloatRangePreset.ZeroToPlusOne;
+                            floatRangePresetPropNew.enumValueIndex = (int)ResizableSyncParameters.FloatRangePreset.ZeroToPlusOne;
                         var customBitCountPropNew = newElement.FindPropertyRelative("customBitCount");
                         if (customBitCountPropNew != null)
                             customBitCountPropNew.intValue = 8;
@@ -215,7 +215,7 @@ namespace Samirin33.NDMF.Components.Editor
 
         private void ManualGenerateAnimator()
         {
-            var selected = targets.OfType<HalfSyncParam>().Where(c => c != null).ToArray();
+            var selected = targets.OfType<ResizableSyncParameters>().Where(c => c != null).ToArray();
             if (selected.Length == 0)
                 return;
 
@@ -223,22 +223,22 @@ namespace Samirin33.NDMF.Components.Editor
             if (avatarRoot == null)
             {
                 EditorUtility.DisplayDialog(
-                    "HalfSyncParam",
+                    "ResizableSyncParameters",
                     "親階層に VRCAvatarDescriptor が見つかりません。アバター配下に配置してから実行してください。",
                     "OK");
                 return;
             }
 
-            var all = avatarRoot.GetComponentsInChildren<HalfSyncParam>(true);
-            Undo.RegisterCompleteObjectUndo(all.Cast<Object>().ToArray(), "Manual Generate HalfSyncParam Animator");
+            var all = avatarRoot.GetComponentsInChildren<ResizableSyncParameters>(true);
+            Undo.RegisterCompleteObjectUndo(all.Cast<Object>().ToArray(), "Manual Generate ResizableSyncParameters Animator");
 
-            var controllers = HalfSyncParamBuilder.BuildManual(avatarRoot, all);
+            var controllers = ResizableSyncParametersBuilder.BuildManual(avatarRoot, all);
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
             SelectGeneratedAnimators(controllers);
 
             // EditorUtility.DisplayDialog(
-            //     "HalfSyncParam",
+            //     "ResizableSyncParameters",
             //     "Animator を生成しました。",
             //     "OK");
         }
@@ -299,7 +299,7 @@ namespace Samirin33.NDMF.Components.Editor
             {
                 var element = _syncParamSettings.GetArrayElementAtIndex(i);
                 var paramTypeProp = element.FindPropertyRelative("paramType");
-                if ((HalfSyncParam.ParamType)paramTypeProp.enumValueIndex == HalfSyncParam.ParamType.Float)
+                if ((ResizableSyncParameters.ParamType)paramTypeProp.enumValueIndex == ResizableSyncParameters.ParamType.Float)
                     count++;
             }
             return count;
@@ -311,7 +311,7 @@ namespace Samirin33.NDMF.Components.Editor
             {
                 var element = _syncParamSettings.GetArrayElementAtIndex(i);
                 var paramTypeProp = element.FindPropertyRelative("paramType");
-                if ((HalfSyncParam.ParamType)paramTypeProp.enumValueIndex != HalfSyncParam.ParamType.Float)
+                if ((ResizableSyncParameters.ParamType)paramTypeProp.enumValueIndex != ResizableSyncParameters.ParamType.Float)
                     continue;
 
                 var smoothWeightProp = element.FindPropertyRelative("smoothWeight");
@@ -322,32 +322,32 @@ namespace Samirin33.NDMF.Components.Editor
 
         private static string GetDefaultParamName(SerializedProperty element)
         {
-            var paramType = (HalfSyncParam.ParamType)element.FindPropertyRelative("paramType").enumValueIndex;
-            var bitType = (HalfSyncParam.BitType)element.FindPropertyRelative("bitType").enumValueIndex;
+            var paramType = (ResizableSyncParameters.ParamType)element.FindPropertyRelative("paramType").enumValueIndex;
+            var bitType = (ResizableSyncParameters.BitType)element.FindPropertyRelative("bitType").enumValueIndex;
             return $"Param_{paramType}{bitType}";
         }
 
-        private static string GetParamDescription(HalfSyncParam.ParamType paramType, SerializedProperty element)
+        private static string GetParamDescription(ResizableSyncParameters.ParamType paramType, SerializedProperty element)
         {
             var maxValue = GetMaxValue(element);
-            var divisionType = (HalfSyncParam.DivisionType)element.FindPropertyRelative("divisionType").enumValueIndex;
-            var divisionLabel = divisionType == HalfSyncParam.DivisionType.Even ? "偶数分割" : "奇数分割";
+            var divisionType = (ResizableSyncParameters.DivisionType)element.FindPropertyRelative("divisionType").enumValueIndex;
+            var divisionLabel = divisionType == ResizableSyncParameters.DivisionType.Even ? "偶数分割" : "奇数分割";
 
-            if (paramType == HalfSyncParam.ParamType.Int)
+            if (paramType == ResizableSyncParameters.ParamType.Int)
             {
                 var (min, max) = GetIntSourceRange(element);
                 return $"{min}~{max}のIntを同期できます。";
             }
 
-            var floatPreset = (HalfSyncParam.FloatRangePreset)element.FindPropertyRelative("floatRangePreset").enumValueIndex;
+            var floatPreset = (ResizableSyncParameters.FloatRangePreset)element.FindPropertyRelative("floatRangePreset").enumValueIndex;
             float rangeMin, rangeMax;
             switch (floatPreset)
             {
-                case HalfSyncParam.FloatRangePreset.MinusOneToPlusOne:
+                case ResizableSyncParameters.FloatRangePreset.MinusOneToPlusOne:
                     rangeMin = -1f;
                     rangeMax = 1f;
                     break;
-                case HalfSyncParam.FloatRangePreset.ZeroToPlusOne:
+                case ResizableSyncParameters.FloatRangePreset.ZeroToPlusOne:
                     rangeMin = 0f;
                     rangeMax = 1f;
                     break;
@@ -366,13 +366,13 @@ namespace Samirin33.NDMF.Components.Editor
         {
             if (floatRangePresetProp == null || divisionTypeProp == null) return;
 
-            switch ((HalfSyncParam.FloatRangePreset)floatRangePresetProp.enumValueIndex)
+            switch ((ResizableSyncParameters.FloatRangePreset)floatRangePresetProp.enumValueIndex)
             {
-                case HalfSyncParam.FloatRangePreset.ZeroToPlusOne:
-                    divisionTypeProp.enumValueIndex = (int)HalfSyncParam.DivisionType.Even;
+                case ResizableSyncParameters.FloatRangePreset.ZeroToPlusOne:
+                    divisionTypeProp.enumValueIndex = (int)ResizableSyncParameters.DivisionType.Even;
                     break;
-                case HalfSyncParam.FloatRangePreset.MinusOneToPlusOne:
-                    divisionTypeProp.enumValueIndex = (int)HalfSyncParam.DivisionType.Odd;
+                case ResizableSyncParameters.FloatRangePreset.MinusOneToPlusOne:
+                    divisionTypeProp.enumValueIndex = (int)ResizableSyncParameters.DivisionType.Odd;
                     break;
             }
         }
@@ -387,8 +387,8 @@ namespace Samirin33.NDMF.Components.Editor
         private static (int min, int max) GetIntSourceRange(SerializedProperty element)
         {
             var span = GetIntRangeSpan(element);
-            var preset = (HalfSyncParam.IntRangePreset)element.FindPropertyRelative("intRangePreset").enumValueIndex;
-            var min = preset == HalfSyncParam.IntRangePreset.FromZero
+            var preset = (ResizableSyncParameters.IntRangePreset)element.FindPropertyRelative("intRangePreset").enumValueIndex;
+            var min = preset == ResizableSyncParameters.IntRangePreset.FromZero
                 ? 0
                 : element.FindPropertyRelative("customIntMin").intValue;
             return (min, min + span);
@@ -401,19 +401,19 @@ namespace Samirin33.NDMF.Components.Editor
 
         private static int GetBitCount(SerializedProperty element)
         {
-            var bitType = (HalfSyncParam.BitType)element.FindPropertyRelative("bitType").enumValueIndex;
-            if (bitType == HalfSyncParam.BitType.Custom)
-                return Mathf.Clamp(element.FindPropertyRelative("customBitCount").intValue, HalfSyncParam.MinCustomBitCount, HalfSyncParam.MaxCustomBitCount);
+            var bitType = (ResizableSyncParameters.BitType)element.FindPropertyRelative("bitType").enumValueIndex;
+            if (bitType == ResizableSyncParameters.BitType.Custom)
+                return Mathf.Clamp(element.FindPropertyRelative("customBitCount").intValue, ResizableSyncParameters.MinCustomBitCount, ResizableSyncParameters.MaxCustomBitCount);
 
             switch (bitType)
             {
-                case HalfSyncParam.BitType._1bit: return 1;
-                case HalfSyncParam.BitType._2bit: return 2;
-                case HalfSyncParam.BitType._3bit: return 3;
-                case HalfSyncParam.BitType._4bit: return 4;
-                case HalfSyncParam.BitType._5bit: return 5;
-                case HalfSyncParam.BitType._6bit: return 6;
-                case HalfSyncParam.BitType._7bit: return 7;
+                case ResizableSyncParameters.BitType._1bit: return 1;
+                case ResizableSyncParameters.BitType._2bit: return 2;
+                case ResizableSyncParameters.BitType._3bit: return 3;
+                case ResizableSyncParameters.BitType._4bit: return 4;
+                case ResizableSyncParameters.BitType._5bit: return 5;
+                case ResizableSyncParameters.BitType._6bit: return 6;
+                case ResizableSyncParameters.BitType._7bit: return 7;
                 default: return 1;
             }
         }
@@ -433,10 +433,10 @@ namespace Samirin33.NDMF.Components.Editor
             return (min, max);
         }
 
-        private static float GetResolution(float rangeMin, float rangeMax, int maxValue, HalfSyncParam.DivisionType divisionType)
+        private static float GetResolution(float rangeMin, float rangeMax, int maxValue, ResizableSyncParameters.DivisionType divisionType)
         {
             var range = rangeMax - rangeMin;
-            return divisionType == HalfSyncParam.DivisionType.Odd
+            return divisionType == ResizableSyncParameters.DivisionType.Odd
                 ? range / (maxValue + 1f)
                 : range / maxValue;
         }

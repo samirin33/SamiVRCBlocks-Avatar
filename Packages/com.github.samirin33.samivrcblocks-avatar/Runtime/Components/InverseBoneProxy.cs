@@ -10,7 +10,7 @@ namespace Samirin33.NDMF.Components
     /// </summary>
     [ExecuteAlways]
     [DisallowMultipleComponent]
-    [AddComponentMenu("SamiVRCBlocks-Avatar/SB Inverse Bone Proxy")]
+    [AddComponentMenu("SamiVRCBlocks-Avatar/SB InverseBoneProxy")]
     public class InverseBoneProxy : SamirinMABase
     {
         [Tooltip("対象 Transform（Avatar 配下）。ビルド時に MA Bone Proxy を付与します。")]

@@ -176,7 +176,7 @@ namespace Samirin33.NDMF.Components.Editor
 
             // EditorUtility.DisplayDialog(
             //     "ParameterSmoothing",
-            //     "Animator を生成しました。\n（HalfSyncParam の Float と同居している場合は、そちら側の生成に含まれます）",
+            //     "Animator を生成しました。\n（ResizableSyncParameters の Float と同居している場合は、そちら側の生成に含まれます）",
             //     "OK");
         }
 

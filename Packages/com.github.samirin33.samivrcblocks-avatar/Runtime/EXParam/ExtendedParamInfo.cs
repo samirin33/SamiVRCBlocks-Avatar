@@ -1,11 +1,9 @@
-using System.Collections;
-using System.Collections.Generic;
 using UnityEngine;
 using Samirin33.NDMF.Base;
 
 namespace Samirin33.NDMF.Module
 {
-    public class ModuleParamInfo : SamirinMABase
+    public class ExtendedParamInfo : SamirinMABase
     {
         [System.Serializable]
         public class ParamInfo

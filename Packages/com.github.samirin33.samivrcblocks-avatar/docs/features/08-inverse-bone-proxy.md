@@ -6,7 +6,7 @@
 
 ## 追加方法
 
-- **Add Component** → **SamiVRCBlocks-Avatar** → **SB Inverse Bone Proxy**
+- **Add Component** → **SamiVRCBlocks-Avatar** → **SB InverseBoneProxy**
 - 追従させたい側（ソース側）の GameObject にアタッチします。
 
 ## 使い方

@@ -7,46 +7,164 @@ using UnityEditor.Animations;
 using UnityEngine;
 using nadena.dev.modular_avatar.core;
 using VRC.SDK3.Avatars.Components;
+using VRC.SDK3.Avatars.ScriptableObjects;
 using Samirin33.NDMF.Base.Plugin;
 using Samirin33.NDMF.Components;
 
 namespace Samirin33.NDMF.Components.Editor
 {
-    public static class HalfSyncParamBuilder
+    public static class ResizableSyncParametersBuilder
     {
         [InitializeOnLoadMethod]
         private static void RegisterBuilder()
         {
-            SamirinMABaseSingleBuildRegistry.Register<HalfSyncParam>(Build);
-            SamirinMABaseSingleBuildRegistry.RegisterReplace<HalfSyncParam>(RunReplace);
+            SamirinMABaseSingleBuildRegistry.Register<ResizableSyncParameters>(Build);
+            SamirinMABaseSingleBuildRegistry.RegisterReplace<ResizableSyncParameters>(RunReplace);
         }
 
         private const string EmptyMotionGUID = "4de039275b65be24c8f0a641d7a44924";
-        private static string GeneratedFolder => "Assets/Generated/SamirinVRCUtility/HalfSyncParam";
+        private static string GeneratedFolder => "Assets/Generated/SamiVRCBlocks/ResizableSyncParameters";
 
-        private static int GetBitCount(HalfSyncParam.syncParamSetting setting)
-            => HalfSyncParam.GetBitCount(setting);
+        private static int GetBitCount(ResizableSyncParameters.SyncParamSetting setting)
+            => ResizableSyncParameters.GetBitCount(setting);
 
-        public static void Build(GameObject avatarRootObject, params HalfSyncParam[] halfSyncParams)
+        public static void Build(GameObject avatarRootObject, params ResizableSyncParameters[] resizableSyncParameters)
         {
-            BuildInternal(avatarRootObject, ensureFpsCounterModule: true, halfSyncParams);
+            // Bit 分解同期に置き換えるため、元パラメーターが Synced 登録されていれば解除する
+            ForceUnsyncOriginalParameters(avatarRootObject, resizableSyncParameters);
+            BuildInternal(avatarRootObject, ensureFpsCounterModule: true, resizableSyncParameters);
         }
 
         /// <summary>
-        /// インスペクターからのマニュアル生成。ModuleSetter（FPSCounter）は付けない。
+        /// ResizableSyncParameters で指定したパラメーターが、アバター内の
+        /// VRCExpressionParameters / ModularAvatarParameters で Synced として登録されている場合、
+        /// Synced でない状態に書き換える（同期 Bit は SUM/ResizableSync/... 側に移す）。
+        /// NDMF ビルド時のみ呼び出すこと（プロジェクト上の ExpressionParameters アセットを汚さないようクローンする）。
         /// </summary>
-        public static AnimatorController[] BuildManual(GameObject avatarRootObject, params HalfSyncParam[] halfSyncParams)
+        private static void ForceUnsyncOriginalParameters(GameObject avatarRootObject,
+            params ResizableSyncParameters[] resizableSyncParameters)
         {
-            return BuildInternal(avatarRootObject, ensureFpsCounterModule: false, halfSyncParams);
+            if (avatarRootObject == null || resizableSyncParameters == null || resizableSyncParameters.Length == 0)
+                return;
+
+            var paramNames = CollectSpecifiedParamNames(resizableSyncParameters);
+            if (paramNames.Count == 0)
+                return;
+
+            ForceUnsyncModularAvatarParameters(avatarRootObject, paramNames);
+            ForceUnsyncVrcExpressionParameters(avatarRootObject, paramNames);
+        }
+
+        private static HashSet<string> CollectSpecifiedParamNames(ResizableSyncParameters[] resizableSyncParameters)
+        {
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var component in resizableSyncParameters)
+            {
+                if (component?.syncParamSettings == null) continue;
+                foreach (var setting in component.syncParamSettings)
+                {
+                    if (setting == null || GetBitCount(setting) < 1) continue;
+                    names.Add(ResizableSyncParameters.GetParamName(setting));
+                }
+            }
+            return names;
+        }
+
+        private static void ForceUnsyncModularAvatarParameters(GameObject avatarRootObject, HashSet<string> paramNames)
+        {
+            var maParametersList = avatarRootObject.GetComponentsInChildren<ModularAvatarParameters>(true);
+            foreach (var maParameters in maParametersList)
+            {
+                if (maParameters?.parameters == null || maParameters.parameters.Count == 0)
+                    continue;
+
+                var changed = false;
+                for (var i = 0; i < maParameters.parameters.Count; i++)
+                {
+                    var config = maParameters.parameters[i];
+                    if (config.isPrefix) continue;
+                    if (string.IsNullOrEmpty(config.nameOrPrefix)) continue;
+                    if (!paramNames.Contains(config.nameOrPrefix)) continue;
+                    if (config.syncType == ParameterSyncType.NotSynced) continue;
+                    if (config.localOnly) continue;
+
+                    config.localOnly = true;
+                    maParameters.parameters[i] = config;
+                    changed = true;
+                }
+
+                if (changed)
+                    EditorUtility.SetDirty(maParameters);
+            }
+        }
+
+        private static void ForceUnsyncVrcExpressionParameters(GameObject avatarRootObject, HashSet<string> paramNames)
+        {
+            var descriptor = avatarRootObject.GetComponent<VRCAvatarDescriptor>();
+            if (descriptor?.expressionParameters?.parameters == null)
+                return;
+
+            var sourceParams = descriptor.expressionParameters;
+            var parameters = sourceParams.parameters;
+            if (parameters == null || parameters.Length == 0)
+                return;
+
+            var needsUnsync = false;
+            for (var i = 0; i < parameters.Length; i++)
+            {
+                var parameter = parameters[i];
+                if (parameter == null) continue;
+                if (string.IsNullOrEmpty(parameter.name)) continue;
+                if (!paramNames.Contains(parameter.name)) continue;
+                if (!parameter.networkSynced) continue;
+                needsUnsync = true;
+                break;
+            }
+
+            if (!needsUnsync)
+                return;
+
+            // プロジェクト上のアセットを直接書き換えないよう、永続アセットならクローンする
+            var expParams = sourceParams;
+            var assetPath = AssetDatabase.GetAssetPath(sourceParams);
+            if (!string.IsNullOrEmpty(assetPath))
+            {
+                expParams = UnityEngine.Object.Instantiate(sourceParams);
+                descriptor.expressionParameters = expParams;
+                parameters = expParams.parameters;
+            }
+
+            for (var i = 0; i < parameters.Length; i++)
+            {
+                var parameter = parameters[i];
+                if (parameter == null) continue;
+                if (string.IsNullOrEmpty(parameter.name)) continue;
+                if (!paramNames.Contains(parameter.name)) continue;
+                if (!parameter.networkSynced) continue;
+
+                parameter.networkSynced = false;
+                parameters[i] = parameter;
+            }
+
+            expParams.parameters = parameters;
+            EditorUtility.SetDirty(descriptor);
+        }
+
+        /// <summary>
+        /// インスペクターからのマニュアル生成。ExtendedParameters（FPSCounter）は付けない。
+        /// </summary>
+        public static AnimatorController[] BuildManual(GameObject avatarRootObject, params ResizableSyncParameters[] resizableSyncParameters)
+        {
+            return BuildInternal(avatarRootObject, ensureFpsCounterModule: false, resizableSyncParameters);
         }
 
         private static AnimatorController[] BuildInternal(GameObject avatarRootObject, bool ensureFpsCounterModule,
-            params HalfSyncParam[] halfSyncParams)
+            params ResizableSyncParameters[] resizableSyncParameters)
         {
-            if (halfSyncParams == null || halfSyncParams.Length == 0)
+            if (resizableSyncParameters == null || resizableSyncParameters.Length == 0)
                 return Array.Empty<AnimatorController>();
 
-            var (mergedSettings, writeDefault) = MergeSettingsFromModule(halfSyncParams);
+            var (mergedSettings, writeDefault) = MergeSettingsFromModule(resizableSyncParameters);
             if (mergedSettings.Count == 0)
                 return Array.Empty<AnimatorController>();
 
@@ -56,20 +174,20 @@ namespace Samirin33.NDMF.Components.Editor
 
             var result = new List<AnimatorController> { controller };
 
-            var moduleParent = halfSyncParams.FirstOrDefault(c => c != null)?.gameObject ?? avatarRootObject;
+            var moduleParent = resizableSyncParameters.FirstOrDefault(c => c != null)?.gameObject ?? avatarRootObject;
             AddModularAvatarModule(moduleParent, controller, paramNamesToRegister);
 
-            var smoothingInfos = ExtractFloatSmoothingInfos(halfSyncParams);
+            var smoothingInfos = ExtractFloatSmoothingInfos(resizableSyncParameters);
             if (smoothingInfos.Count > 0)
             {
-                var smoothingController = ParameterSmoothingBuilder.BuildFromHalfSyncParam(
+                var smoothingController = ParameterSmoothingBuilder.BuildFromResizableSyncParameters(
                     avatarRootObject, smoothingInfos.ToArray(), moduleParent);
                 if (smoothingController != null)
                     result.Add(smoothingController);
 
                 if (ensureFpsCounterModule)
                 {
-                    foreach (var component in halfSyncParams)
+                    foreach (var component in resizableSyncParameters)
                     {
                         if (component == null || !HasFloatSettings(component)) continue;
                         ParameterSmoothingBuilder.EnsureFPSCounterModule(component.gameObject);
@@ -80,26 +198,26 @@ namespace Samirin33.NDMF.Components.Editor
             return result.ToArray();
         }
 
-        private static bool HasFloatSettings(HalfSyncParam halfSyncParam)
+        private static bool HasFloatSettings(ResizableSyncParameters resizableSyncParam)
         {
-            if (halfSyncParam.syncParamSettings == null) return false;
-            return halfSyncParam.syncParamSettings.Any(s => s.paramType == HalfSyncParam.ParamType.Float);
+            if (resizableSyncParam.syncParamSettings == null) return false;
+            return resizableSyncParam.syncParamSettings.Any(s => s.paramType == ResizableSyncParameters.ParamType.Float);
         }
 
-        private static List<ParameterSmoothing.ParameterSmoothingInfo> ExtractFloatSmoothingInfos(HalfSyncParam[] halfSyncParams)
+        private static List<ParameterSmoothing.ParameterSmoothingInfo> ExtractFloatSmoothingInfos(ResizableSyncParameters[] resizableSyncParameters)
         {
             var processedParamNames = new HashSet<string>(StringComparer.Ordinal);
             var infos = new List<ParameterSmoothing.ParameterSmoothingInfo>();
 
-            foreach (var component in halfSyncParams)
+            foreach (var component in resizableSyncParameters)
             {
                 if (component?.syncParamSettings == null) continue;
 
                 foreach (var setting in component.syncParamSettings)
                 {
-                    if (setting.paramType != HalfSyncParam.ParamType.Float) continue;
+                    if (setting.paramType != ResizableSyncParameters.ParamType.Float) continue;
 
-                    var paramName = HalfSyncParam.GetParamName(setting);
+                    var paramName = ResizableSyncParameters.GetParamName(setting);
 
                     if (!processedParamNames.Add(paramName)) continue;
 
@@ -117,7 +235,7 @@ namespace Samirin33.NDMF.Components.Editor
         }
 
         /// <summary>
-        /// 置換処理で除外するレイヤー名（Smoothing 関連）。ParameterSmoothing / HalfSyncParam 由来のレイヤーを除外する。
+        /// 置換処理で除外するレイヤー名（Smoothing 関連）。ParameterSmoothing / ResizableSyncParameters 由来のレイヤーを除外する。
         /// </summary>
         private static readonly string[] DefaultExcludedLayerNames = { "ParameterSmoothing", "Smoothed" };
 
@@ -125,9 +243,9 @@ namespace Samirin33.NDMF.Components.Editor
         /// Generating 後（afterModularAvatar）で呼ばれる置換処理。VRCAvatarDescriptor の FX レイヤーに作用する。
         /// Smoothing 関連レイヤーは除外レイヤーとして指定し、置換対象外とする。
         /// </summary>
-        public static void RunReplace(GameObject avatarRootObject, params HalfSyncParam[] halfSyncParams)
+        public static void RunReplace(GameObject avatarRootObject, params ResizableSyncParameters[] resizableSyncParameters)
         {
-            if (avatarRootObject == null || halfSyncParams == null || halfSyncParams.Length == 0)
+            if (avatarRootObject == null || resizableSyncParameters == null || resizableSyncParameters.Length == 0)
                 return;
 
             var fxController = VRCAvatarDescriptorControllerUtility.GetController(
@@ -136,16 +254,16 @@ namespace Samirin33.NDMF.Components.Editor
             if (fxController == null) return;
 
             var processedParamNames = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var component in halfSyncParams)
+            foreach (var component in resizableSyncParameters)
             {
                 if (component == null || !component.replaceWithSmoothedInAnimator) continue;
                 if (component.syncParamSettings == null) continue;
 
                 foreach (var setting in component.syncParamSettings)
                 {
-                    if (setting.paramType != HalfSyncParam.ParamType.Float) continue;
+                    if (setting.paramType != ResizableSyncParameters.ParamType.Float) continue;
 
-                    var paramName = HalfSyncParam.GetParamName(setting);
+                    var paramName = ResizableSyncParameters.GetParamName(setting);
 
                     if (!processedParamNames.Add(paramName)) continue;
 
@@ -155,14 +273,14 @@ namespace Samirin33.NDMF.Components.Editor
             }
         }
 
-        private static (List<HalfSyncParam.syncParamSetting> settings, bool writeDefault) MergeSettingsFromModule(
-            HalfSyncParam[] halfSyncParams)
+        private static (List<ResizableSyncParameters.SyncParamSetting> settings, bool writeDefault) MergeSettingsFromModule(
+            ResizableSyncParameters[] resizableSyncParameters)
         {
             var processedParamNames = new HashSet<string>(StringComparer.Ordinal);
-            var mergedSettings = new List<HalfSyncParam.syncParamSetting>();
-            var writeDefault = halfSyncParams.Length > 0 && halfSyncParams[0].writeDefault;
+            var mergedSettings = new List<ResizableSyncParameters.SyncParamSetting>();
+            var writeDefault = resizableSyncParameters.Length > 0 && resizableSyncParameters[0].writeDefault;
 
-            foreach (var component in halfSyncParams)
+            foreach (var component in resizableSyncParameters)
             {
                 if (component.syncParamSettings == null) continue;
 
@@ -170,7 +288,7 @@ namespace Samirin33.NDMF.Components.Editor
                 {
                     if (GetBitCount(setting) < 1) continue;
 
-                    var paramName = HalfSyncParam.GetParamName(setting);
+                    var paramName = ResizableSyncParameters.GetParamName(setting);
 
                     if (processedParamNames.Contains(paramName))
                         continue;
@@ -186,7 +304,7 @@ namespace Samirin33.NDMF.Components.Editor
             return (mergedSettings, writeDefault);
         }
 
-        private static AnimatorController CreateControllerFromScratch(HalfSyncParam.syncParamSetting[] settings,
+        private static AnimatorController CreateControllerFromScratch(ResizableSyncParameters.SyncParamSetting[] settings,
             bool writeDefault, out List<(string name, ParameterSyncType syncType)> paramNamesToRegister)
         {
             paramNamesToRegister = new List<(string, ParameterSyncType)>();
@@ -198,11 +316,11 @@ namespace Samirin33.NDMF.Components.Editor
             var paramDriverType = GetVRCAvatarParameterDriverType();
             if (paramDriverType == null)
             {
-                Debug.LogError("[HalfSyncParam] VRCAvatarParameterDriver 型が見つかりません。VRChat SDK3 Avatars がインストールされているか確認してください。");
+                Debug.LogError("[ResizableSyncParameters] VRCAvatarParameterDriver 型が見つかりません。VRChat SDK3 Avatars がインストールされているか確認してください。");
                 return null;
             }
 
-            var controllerPath = $"{GeneratedFolder}/HalfSyncParam_Generated.controller";
+            var controllerPath = $"{GeneratedFolder}/ResizableSyncParameters_Generated.controller";
             if (AssetDatabase.LoadAssetAtPath<AnimatorController>(controllerPath) != null)
                 AssetDatabase.DeleteAsset(controllerPath);
 
@@ -217,9 +335,9 @@ namespace Samirin33.NDMF.Components.Editor
             foreach (var setting in settings)
             {
                 var bitCount = GetBitCount(setting);
-                var paramName = HalfSyncParam.GetParamName(setting);
+                var paramName = ResizableSyncParameters.GetParamName(setting);
                 var maxValue = (1 << bitCount) - 1;
-                var isFloat = setting.paramType == HalfSyncParam.ParamType.Float;
+                var isFloat = setting.paramType == ResizableSyncParameters.ParamType.Float;
                 var intParamName = $"{paramName}_Int";
 
                 if (isFloat)
@@ -235,7 +353,7 @@ namespace Samirin33.NDMF.Components.Editor
                 controller.AddParameter(intParamName, AnimatorControllerParameterType.Int);
                 for (int i = 0; i < bitCount; i++)
                 {
-                    var syncParamName = HalfSyncParam.GetSyncBoolParamName(paramName, i);
+                    var syncParamName = ResizableSyncParameters.GetSyncBoolParamName(paramName, i);
                     controller.AddParameter(syncParamName, AnimatorControllerParameterType.Bool);
                     paramNamesToRegister.Add((syncParamName, ParameterSyncType.Bool));
                 }
@@ -338,7 +456,7 @@ namespace Samirin33.NDMF.Components.Editor
                 for (int b = 0; b < bitCount; b++)
                 {
                     // paramName は呼び出し側から渡される int パラメータ名（{名前}_Int）
-                    var syncParamName = $"SUM/HalfParam/{paramName}/{b}";
+                    var syncParamName = $"SUM/ResizableSync/{paramName}/{b}";
                     var boolVal = ((value >> b) & 1) != 0;
                     remoteTransition.AddCondition(boolVal ? AnimatorConditionMode.If : AnimatorConditionMode.IfNot, 0, syncParamName);
                 }
@@ -354,7 +472,7 @@ namespace Samirin33.NDMF.Components.Editor
             return layer;
         }
 
-        private static AnimatorControllerLayer CreateRangeConvertLayer(HalfSyncParam.syncParamSetting[] settings, bool writeDefault)
+        private static AnimatorControllerLayer CreateRangeConvertLayer(ResizableSyncParameters.SyncParamSetting[] settings, bool writeDefault)
         {
             if (settings.Length == 0) return null;
 
@@ -409,7 +527,7 @@ namespace Samirin33.NDMF.Components.Editor
             };
         }
 
-        private static void AddRangeConvertParamDrivers(AnimatorController controller, HalfSyncParam.syncParamSetting[] settings,
+        private static void AddRangeConvertParamDrivers(AnimatorController controller, ResizableSyncParameters.SyncParamSetting[] settings,
             Type paramDriverType)
         {
             if (settings.Length == 0 || paramDriverType == null) return;
@@ -437,7 +555,7 @@ namespace Samirin33.NDMF.Components.Editor
                             EnsureSubAsset(behaviour, controller);
                             SetParamDriverCopy(behaviour, paramName, intParamName, inputMin, inputMax, syncMin, syncMax, clearFirst: true);
 
-                            if (setting.paramType == HalfSyncParam.ParamType.Float)
+                            if (setting.paramType == ResizableSyncParameters.ParamType.Float)
                             {
                                 var (destMin, destMax, sourceMin, sourceMax) = GetSyncToOutputRanges(setting, maxValue);
                                 SetParamDriverCopy(behaviour, intParamName, $"{paramName}_Snapped", sourceMin, sourceMax, destMin, destMax, clearFirst: false);
@@ -460,7 +578,7 @@ namespace Samirin33.NDMF.Components.Editor
 
                             EnsureSubAsset(behaviour, controller);
 
-                            if (setting.paramType == HalfSyncParam.ParamType.Float)
+                            if (setting.paramType == ResizableSyncParameters.ParamType.Float)
                             {
                                 SetParamDriverCopy(behaviour, intParamName, $"{paramName}_Snapped", sourceMin, sourceMax, destMin, destMax, clearFirst: true);
                                 SetParamDriverCopy(behaviour, $"{paramName}_Snapped", paramName, destMin, destMax, outputMin, outputMax, clearFirst: false);
@@ -475,20 +593,20 @@ namespace Samirin33.NDMF.Components.Editor
             }
         }
 
-        private static string GetParamName(HalfSyncParam.syncParamSetting setting)
-            => HalfSyncParam.GetParamName(setting);
+        private static string GetParamName(ResizableSyncParameters.SyncParamSetting setting)
+            => ResizableSyncParameters.GetParamName(setting);
 
-        private static (float min, float max) GetSourceRange(HalfSyncParam.syncParamSetting setting)
+        private static (float min, float max) GetSourceRange(ResizableSyncParameters.SyncParamSetting setting)
         {
-            if (setting.paramType == HalfSyncParam.ParamType.Float)
+            if (setting.paramType == ResizableSyncParameters.ParamType.Float)
             {
                 switch (setting.floatRangePreset)
                 {
-                    case HalfSyncParam.FloatRangePreset.MinusOneToPlusOne:
+                    case ResizableSyncParameters.FloatRangePreset.MinusOneToPlusOne:
                         return (-1f, 1f);
-                    case HalfSyncParam.FloatRangePreset.ZeroToPlusOne:
+                    case ResizableSyncParameters.FloatRangePreset.ZeroToPlusOne:
                         return (0f, 1f);
-                    case HalfSyncParam.FloatRangePreset.Custom:
+                    case ResizableSyncParameters.FloatRangePreset.Custom:
                         return GetFloatCustomRange(setting.customFloatMin, setting.customFloatMax);
                 }
             }
@@ -500,10 +618,10 @@ namespace Samirin33.NDMF.Components.Editor
             return (0f, 1f);
         }
 
-        private static (float min, float max) GetIntSourceRange(HalfSyncParam.syncParamSetting setting)
+        private static (float min, float max) GetIntSourceRange(ResizableSyncParameters.SyncParamSetting setting)
         {
-            var span = HalfSyncParam.GetIntRangeSpan(setting);
-            var min = setting.intRangePreset == HalfSyncParam.IntRangePreset.FromZero
+            var span = ResizableSyncParameters.GetIntRangeSpan(setting);
+            var min = setting.intRangePreset == ResizableSyncParameters.IntRangePreset.FromZero
                 ? 0
                 : setting.customIntMin;
             return (min, min + span - 1);
@@ -520,13 +638,13 @@ namespace Samirin33.NDMF.Components.Editor
         /// ユーザー入力レンジから同期用 Int レンジへの変換範囲。
         /// </summary>
         private static (float inputMin, float inputMax, float syncMin, float syncMax) GetInputToSyncRanges(
-            HalfSyncParam.syncParamSetting setting, int maxValue)
+            ResizableSyncParameters.SyncParamSetting setting, int maxValue)
         {
             var (rangeMin, rangeMax) = GetSourceRange(setting);
-            if (setting.paramType == HalfSyncParam.ParamType.Int)
+            if (setting.paramType == ResizableSyncParameters.ParamType.Int)
                 return (rangeMin, rangeMax, 0f, maxValue);
 
-            if (setting.divisionType == HalfSyncParam.DivisionType.Odd)
+            if (setting.divisionType == ResizableSyncParameters.DivisionType.Odd)
             {
                 var step = (rangeMax - rangeMin) / (maxValue + 1f);
                 return (rangeMin + step * 0.5f, rangeMax - step * 0.5f, 0f, maxValue);
@@ -539,13 +657,13 @@ namespace Samirin33.NDMF.Components.Editor
         /// 同期用 Int レンジから出力レンジへの変換範囲。
         /// </summary>
         private static (float destMin, float destMax, float sourceMin, float sourceMax) GetSyncToOutputRanges(
-            HalfSyncParam.syncParamSetting setting, int maxValue)
+            ResizableSyncParameters.SyncParamSetting setting, int maxValue)
         {
             var (rangeMin, rangeMax) = GetSourceRange(setting);
-            if (setting.paramType == HalfSyncParam.ParamType.Int)
+            if (setting.paramType == ResizableSyncParameters.ParamType.Int)
                 return (rangeMin, rangeMax, 0f, maxValue);
 
-            if (setting.divisionType == HalfSyncParam.DivisionType.Odd)
+            if (setting.divisionType == ResizableSyncParameters.DivisionType.Odd)
             {
                 var step = (rangeMax - rangeMin) / (maxValue + 1f);
                 return (rangeMin + step * 0.5f, rangeMax - step * 0.5f, 0f, maxValue);
@@ -638,7 +756,7 @@ namespace Samirin33.NDMF.Components.Editor
                 for (int i = 0; i < boolValues.Length; i++)
                 {
                     // paramName は int パラメータ名（{名前}_Int）
-                    var syncParamName = $"SUM/HalfParam/{paramName}/{i}";
+                    var syncParamName = $"SUM/ResizableSync/{paramName}/{i}";
                     parametersProp.InsertArrayElementAtIndex(i);
                     SetParamDriverEntry(parametersProp.GetArrayElementAtIndex(i), syncParamName, boolValues[i] ? 1 : 0);
                 }
@@ -689,7 +807,7 @@ namespace Samirin33.NDMF.Components.Editor
             if (!Directory.Exists(GeneratedFolder))
                 Directory.CreateDirectory(GeneratedFolder);
 
-            var clipPath = $"{GeneratedFolder}/HalfSyncParam_Empty.anim";
+            var clipPath = $"{GeneratedFolder}/ResizableSyncParameters_Empty.anim";
             var emptyClip = AssetDatabase.LoadAssetAtPath<AnimationClip>(clipPath);
             if (emptyClip == null)
             {
@@ -710,7 +828,7 @@ namespace Samirin33.NDMF.Components.Editor
         {
             var moduleRoot = ModularAvatarMergeAnimatorUtility.RegisterMergeAnimatorModule(
                 parentObject,
-                "HalfSyncParam_Module",
+                "ResizableSyncParameters_Module",
                 controller,
                 layerPriority: 0,
                 matchAvatarWriteDefaults: false);

@@ -13,6 +13,7 @@ namespace Samirin33.NDMF.Components
     /// チューニング用のギズモ表示コンポーネント。
     /// 自身または親が選択されているとき、矢印・中心球・任意テキスト・半透明メッシュを Scene ビューに描画する。
     /// active 時は targetTransforms に自身+Offset を適用する。
+    /// previewParticles 時は Target 配下の ParticleSystem をエディタ上でプレビュー再生する。
     /// ビルド時、子が無い場合は自身の GameObject を削除する。
     /// </summary>
     [ExecuteAlways]
@@ -52,6 +53,9 @@ namespace Samirin33.NDMF.Components
 
         [Tooltip("true のとき、Target に自身の Transform + Offset を継続適用する")]
         public bool active;
+
+        [Tooltip("true のとき、TuningObject 自身の選択中のみ Target 配下の ParticleSystem をエディタ上でプレビュー再生する")]
+        public bool previewParticles;
 
         [Header("Target Transforms")]
         public TargetTransform[] targetTransforms;
@@ -322,6 +326,10 @@ namespace Samirin33.NDMF.Components
         private double _placementAlignStartTime;
         private int _placementAlignFrames;
 
+        private bool _particlePreviewActive;
+        private double _lastParticlePreviewTime = -1;
+        private readonly List<ParticleSystem> _previewParticleRoots = new List<ParticleSystem>();
+
         private void OnEnable()
         {
             EditorApplication.update -= EditorUpdate;
@@ -334,6 +342,7 @@ namespace Samirin33.NDMF.Components
         private void OnDisable()
         {
             EditorApplication.update -= EditorUpdate;
+            StopParticlePreview();
         }
 
         private void Reset()
@@ -349,6 +358,9 @@ namespace Samirin33.NDMF.Components
                 if (_placementSnapCompleted)
                     _placementSnapCompleted = false;
             }
+
+            if (!previewParticles && _particlePreviewActive)
+                StopParticlePreview();
         }
 
         /// <summary>
@@ -433,6 +445,143 @@ namespace Samirin33.NDMF.Components
 
             if (active)
                 ApplyToTargets();
+
+            UpdateParticlePreview();
+        }
+
+        /// <summary>
+        /// Target 配下の ParticleSystem をエディタ上で Simulate してプレビューする。
+        /// TuningObject 自身が選択されているときのみ再生する（親・Target・パーティクル本体の選択では動かさない）。
+        /// </summary>
+        private void UpdateParticlePreview()
+        {
+            if (!previewParticles || !IsTuningObjectDirectlySelected())
+            {
+                if (_particlePreviewActive)
+                    ReleaseParticlePreview();
+                return;
+            }
+
+            CollectPreviewParticleRoots();
+            if (_previewParticleRoots.Count == 0)
+            {
+                if (_particlePreviewActive)
+                    ReleaseParticlePreview();
+                return;
+            }
+
+            var now = EditorApplication.timeSinceStartup;
+            // 同一時刻の多重呼び出し（Repaint 連鎖など）で dt を二重適用しない
+            if (_lastParticlePreviewTime >= 0 && now <= _lastParticlePreviewTime)
+                return;
+
+            var dt = _lastParticlePreviewTime < 0 ? (1f / 60f) : (float)(now - _lastParticlePreviewTime);
+            _lastParticlePreviewTime = now;
+            if (dt <= 0f || dt > 0.1f)
+                dt = 1f / 60f;
+
+            if (!_particlePreviewActive)
+            {
+                for (int i = 0; i < _previewParticleRoots.Count; i++)
+                {
+                    var ps = _previewParticleRoots[i];
+                    if (ps == null) continue;
+                    ps.Simulate(0f, true, true, false);
+                }
+                _particlePreviewActive = true;
+            }
+
+            for (int i = 0; i < _previewParticleRoots.Count; i++)
+            {
+                var ps = _previewParticleRoots[i];
+                if (ps == null) continue;
+                ps.Simulate(dt, true, false, false);
+            }
+
+            var sceneView = SceneView.lastActiveSceneView;
+            if (sceneView != null)
+                sceneView.Repaint();
+        }
+
+        /// <summary>Hierarchy / Scene でこの TuningObject 自身が直接選択されているか。</summary>
+        private bool IsTuningObjectDirectlySelected()
+        {
+            var selected = Selection.gameObjects;
+            if (selected == null || selected.Length == 0)
+                return false;
+
+            for (int i = 0; i < selected.Length; i++)
+            {
+                if (selected[i] == gameObject)
+                    return true;
+            }
+
+            return false;
+        }
+
+        private void CollectPreviewParticleRoots()
+        {
+            _previewParticleRoots.Clear();
+            if (targetTransforms == null) return;
+
+            for (int i = 0; i < targetTransforms.Length; i++)
+            {
+                var entry = targetTransforms[i];
+                if (entry == null || entry.transform == null) continue;
+
+                var root = entry.transform;
+                var systems = root.GetComponentsInChildren<ParticleSystem>(true);
+                for (int j = 0; j < systems.Length; j++)
+                {
+                    var ps = systems[j];
+                    if (ps == null || !IsParticleRootUnder(ps, root)) continue;
+                    if (!_previewParticleRoots.Contains(ps))
+                        _previewParticleRoots.Add(ps);
+                }
+            }
+        }
+
+        /// <summary>
+        /// targetRoot 配下で、親方向に別の ParticleSystem が無いルートを判定する。
+        /// </summary>
+        private static bool IsParticleRootUnder(ParticleSystem ps, Transform targetRoot)
+        {
+            for (var p = ps.transform.parent; p != null; p = p.parent)
+            {
+                if (p.GetComponent<ParticleSystem>() != null)
+                    return false;
+                if (p == targetRoot)
+                    break;
+                if (!p.IsChildOf(targetRoot))
+                    break;
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// プレビュー更新を終了する。Stop() は呼ばず Clear のみ行い、パーティクル本体選択時の再生に干渉しない。
+        /// </summary>
+        private void ReleaseParticlePreview()
+        {
+            if (_previewParticleRoots.Count == 0)
+                CollectPreviewParticleRoots();
+
+            for (int i = 0; i < _previewParticleRoots.Count; i++)
+            {
+                var ps = _previewParticleRoots[i];
+                if (ps == null) continue;
+                ps.Clear(true);
+            }
+
+            _previewParticleRoots.Clear();
+            _particlePreviewActive = false;
+            _lastParticlePreviewTime = -1;
+        }
+
+        private void StopParticlePreview()
+        {
+            ReleaseParticlePreview();
         }
 
         private void OnDrawGizmos()

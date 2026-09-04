@@ -9,10 +9,10 @@ using Samirin33.NDMF.Module;
 
 namespace Samirin33.NDMF.Module.Editor
 {
-    [CustomEditor(typeof(ModuleSetter))]
-    public class ModuleSetterEditor : SamirinMABaseEditor
+    [CustomEditor(typeof(ExtendedParameters))]
+    public class ExtendedParametersEditor : SamirinMABaseEditor
     {
-        private const string ModulePrefabsFolderGUID = "c657f4c093306024f8e25fa39b21baf0";
+        private const string ParameterPrefabsFolderGUID = "c657f4c093306024f8e25fa39b21baf0";
 
         public override void OnInspectorGUI()
         {
@@ -24,26 +24,26 @@ namespace Samirin33.NDMF.Module.Editor
                     "Animatorで新しく取得できるパラメーターを追加することができます！",
                     MessageType.Info);
 
-                // modulePrefabs以外をデフォルト表示
-                DrawPropertiesExcluding(serializedObject, "modulePrefabs", "m_Script");
+                // parameterPrefabs以外をデフォルト表示
+                DrawPropertiesExcluding(serializedObject, "parameterPrefabs", "m_Script");
 
-                // プレファブ選択UI（ModulePrefabsフォルダから選択）
-                DrawModulePrefabsSelector();
+                // プレファブ選択UI（モジュール用フォルダから選択）
+                DrawParameterPrefabsSelector();
 
                 serializedObject.ApplyModifiedProperties();
 
-                var setter = (ModuleSetter)target;
+                var extendedParameters = (ExtendedParameters)target;
 
-                if (setter.modulePrefabs != null && setter.modulePrefabs.Length > 0)
+                if (extendedParameters.parameterPrefabs != null && extendedParameters.parameterPrefabs.Length > 0)
                 {
                     EditorGUILayout.Space(10);
                     EditorGUILayout.LabelField("取得できるパラメーター");
 
-                    foreach (var prefab in setter.modulePrefabs)
+                    foreach (var prefab in extendedParameters.parameterPrefabs)
                     {
                         if (prefab == null) continue;
 
-                        var paramInfos = prefab.GetComponentsInChildren<ModuleParamInfo>(true);
+                        var paramInfos = prefab.GetComponentsInChildren<ExtendedParamInfo>(true);
                         if (paramInfos.Length == 0) continue;
 
                         EditorGUILayout.Space(5);
@@ -110,14 +110,14 @@ namespace Samirin33.NDMF.Module.Editor
                 EditorGUILayout.Space(10);
                 if (GUILayout.Button("Animatorにパラメーターを追加"))
                 {
-                    AddMissingParametersToAnimator(setter);
+                    AddMissingParametersToAnimator(extendedParameters);
                 }
             });
         }
 
-        private static void AddMissingParametersToAnimator(ModuleSetter setter)
+        private static void AddMissingParametersToAnimator(ExtendedParameters extendedParameters)
         {
-            var animator = setter.GetComponentInParent<Animator>();
+            var animator = extendedParameters.GetComponentInParent<Animator>();
             if (animator == null)
             {
                 EditorUtility.DisplayDialog("エラー", "自身または親にAnimatorが見つかりません。", "OK");
@@ -131,7 +131,7 @@ namespace Samirin33.NDMF.Module.Editor
                 return;
             }
 
-            var paramsToAdd = CollectParamsFromPrefabs(setter);
+            var paramsToAdd = CollectParamsFromPrefabs(extendedParameters);
             if (paramsToAdd.Count == 0)
             {
                 EditorUtility.DisplayDialog("情報", "追加するパラメーターがありません。", "OK");
@@ -175,7 +175,7 @@ namespace Samirin33.NDMF.Module.Editor
             {
                 EditorUtility.SetDirty(controller);
                 AssetDatabase.SaveAssetIfDirty(controller);
-                Debug.Log($"[PrefabSetter] {controller.name}: {addedNames.Count} 個のパラメータを追加しました。");
+                Debug.Log($"[ExtendedParameters] {controller.name}: {addedNames.Count} 個のパラメータを追加しました。");
             }
             else
             {
@@ -203,18 +203,18 @@ namespace Samirin33.NDMF.Module.Editor
             public bool defaultBool;
         }
 
-        private static List<ParamToAdd> CollectParamsFromPrefabs(ModuleSetter setter)
+        private static List<ParamToAdd> CollectParamsFromPrefabs(ExtendedParameters extendedParameters)
         {
             var result = new List<ParamToAdd>();
             var seen = new HashSet<string>();
 
-            if (setter.modulePrefabs == null) return result;
+            if (extendedParameters.parameterPrefabs == null) return result;
 
-            foreach (var prefab in setter.modulePrefabs)
+            foreach (var prefab in extendedParameters.parameterPrefabs)
             {
                 if (prefab == null) continue;
 
-                var paramInfos = prefab.GetComponentsInChildren<ModuleParamInfo>(true);
+                var paramInfos = prefab.GetComponentsInChildren<ExtendedParamInfo>(true);
                 foreach (var paramInfo in paramInfos)
                 {
                     if (paramInfo.paramInfos == null) continue;
@@ -240,7 +240,7 @@ namespace Samirin33.NDMF.Module.Editor
             return result;
         }
 
-        private static string GetDefaultValueString(ModuleParamInfo.ParamInfo param)
+        private static string GetDefaultValueString(ExtendedParamInfo.ParamInfo param)
         {
             switch (param.paramType)
             {
@@ -263,15 +263,15 @@ namespace Samirin33.NDMF.Module.Editor
             return path;
         }
 
-        private void DrawModulePrefabsSelector()
+        private void DrawParameterPrefabsSelector()
         {
-            var prefabsProp = serializedObject.FindProperty("modulePrefabs");
+            var prefabsProp = serializedObject.FindProperty("parameterPrefabs");
             if (prefabsProp == null) return;
 
-            var folderPath = AssetDatabase.GUIDToAssetPath(ModulePrefabsFolderGUID);
+            var folderPath = AssetDatabase.GUIDToAssetPath(ParameterPrefabsFolderGUID);
             if (string.IsNullOrEmpty(folderPath))
             {
-                DrawHelpBoxWithDefaultFont($"GUID {ModulePrefabsFolderGUID} のフォルダが見つかりません。", MessageType.Warning);
+                DrawHelpBoxWithDefaultFont($"GUID {ParameterPrefabsFolderGUID} のフォルダが見つかりません。", MessageType.Warning);
                 EditorGUILayout.PropertyField(prefabsProp, true);
                 return;
             }
@@ -312,11 +312,11 @@ namespace Samirin33.NDMF.Module.Editor
         private void ShowPrefabSelectionMenu(List<GameObject> availablePrefabs)
         {
             var menu = new GenericMenu();
-            var setter = (ModuleSetter)target;
+            var extendedParameters = (ExtendedParameters)target;
             var currentPrefabs = new HashSet<GameObject>();
-            if (setter.modulePrefabs != null)
+            if (extendedParameters.parameterPrefabs != null)
             {
-                foreach (var p in setter.modulePrefabs)
+                foreach (var p in extendedParameters.parameterPrefabs)
                     if (p != null) currentPrefabs.Add(p);
             }
 
@@ -327,14 +327,14 @@ namespace Samirin33.NDMF.Module.Editor
                 var content = new GUIContent(p.name + (isSelected ? " ✓" : ""));
                 menu.AddItem(content, isSelected, () =>
                 {
-                    var s = target as ModuleSetter;
+                    var s = target as ExtendedParameters;
                     if (s == null) return;
 
-                    Undo.RecordObject(s, "Module Prefabs Toggle");
+                    Undo.RecordObject(s, "Parameter Prefabs Toggle");
                     var list = new List<GameObject>();
-                    if (s.modulePrefabs != null)
+                    if (s.parameterPrefabs != null)
                     {
-                        foreach (var existing in s.modulePrefabs)
+                        foreach (var existing in s.parameterPrefabs)
                             if (existing != null) list.Add(existing);
                     }
 
@@ -343,7 +343,7 @@ namespace Samirin33.NDMF.Module.Editor
                     else
                         list.Add(p);
 
-                    s.modulePrefabs = list.ToArray();
+                    s.parameterPrefabs = list.ToArray();
                     EditorUtility.SetDirty(s);
                 });
             }

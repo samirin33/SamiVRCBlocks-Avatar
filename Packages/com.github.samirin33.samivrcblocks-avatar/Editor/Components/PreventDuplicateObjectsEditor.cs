@@ -5,14 +5,14 @@ using Samirin33.NDMF.Components;
 
 namespace Samirin33.NDMF.Components.Editor
 {
-    [CustomEditor(typeof(PreventingDuplicateObjects))]
-    public class PreventingDuplicateObjectsEditor : SamirinMABaseEditor
+    [CustomEditor(typeof(PreventDuplicateObjects))]
+    public class PreventDuplicateObjectsEditor : SamirinMABaseEditor
     {
         private SerializedProperty _id;
 
         private void OnEnable()
         {
-            _id = serializedObject.FindProperty(nameof(PreventingDuplicateObjects.id));
+            _id = serializedObject.FindProperty(nameof(PreventDuplicateObjects.id));
         }
 
         public override void OnInspectorGUI()

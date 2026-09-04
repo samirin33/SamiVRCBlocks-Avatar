@@ -5,7 +5,7 @@ using Samirin33.NDMF.Module;
 
 namespace Samirin33.NDMF.Module.Editor
 {
-    [CustomPropertyDrawer(typeof(ModuleParamInfo.ParamInfo))]
+    [CustomPropertyDrawer(typeof(ExtendedParamInfo.ParamInfo))]
     public class ParamInfoEditor : PropertyDrawer
     {
         public override bool CanCacheInspectorGUI(SerializedProperty property)
@@ -31,14 +31,14 @@ namespace Samirin33.NDMF.Module.Editor
                 return;
             }
 
-            // ModuleParamInfoからAnimatorを取得
+            // ExtendedParamInfoからAnimatorを取得
             Animator animator = null;
-            if (property.serializedObject.targetObject is ModuleParamInfo moduleParamInfo)
+            if (property.serializedObject.targetObject is ExtendedParamInfo extendedParamInfo)
             {
-                animator = moduleParamInfo.animator;
+                animator = extendedParamInfo.animator;
                 if (animator == null)
                 {
-                    animator = moduleParamInfo.GetComponent<Animator>();
+                    animator = extendedParamInfo.GetComponent<Animator>();
                 }
             }
 
@@ -129,8 +129,9 @@ namespace Samirin33.NDMF.Module.Editor
 
             y += lineHeight;
 
-            // paramType（選択時に自動認識、表示のみ）
+            // paramType（Animatorに存在する場合は自動認識してロック、未設定時は手動編集可）
             Rect paramTypeRect = new Rect(position.x, y, position.width, EditorGUIUtility.singleLineHeight);
+            bool typeLockedFromAnimator = false;
             if (!string.IsNullOrEmpty(paramNameProp.stringValue) && animator != null && animator.runtimeAnimatorController != null)
             {
                 var enumValues = (AnimatorControllerParameterType[])System.Enum.GetValues(typeof(AnimatorControllerParameterType));
@@ -146,12 +147,18 @@ namespace Samirin33.NDMF.Module.Editor
                         }
                         SyncDefaultFromAnimatorParam(param, defaultFloatProp, defaultIntProp, defaultBoolProp);
                         property.serializedObject.ApplyModifiedProperties();
+                        typeLockedFromAnimator = true;
                         break;
                     }
                 }
             }
-            EditorGUI.BeginDisabledGroup(true);
+            EditorGUI.BeginDisabledGroup(typeLockedFromAnimator);
+            EditorGUI.BeginChangeCheck();
             EditorGUI.PropertyField(paramTypeRect, paramTypeProp, new GUIContent("Param Type"));
+            if (EditorGUI.EndChangeCheck())
+            {
+                property.serializedObject.ApplyModifiedProperties();
+            }
             EditorGUI.EndDisabledGroup();
             y += lineHeight;
 

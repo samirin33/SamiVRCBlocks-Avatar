@@ -10,8 +10,8 @@ using UnityEditor;
 
 namespace Samirin33.NDMF.Components
 {
-    [AddComponentMenu("SamiVRCBlocks-Avatar/SB PreventingDuplicateObjects")]
-    public class PreventingDuplicateObjects : SamirinMABaseSingle
+    [AddComponentMenu("SamiVRCBlocks-Avatar/SB PreventDuplicateObjects")]
+    public class PreventDuplicateObjects : SamirinMABaseSingle
     {
         public string id;
 
@@ -36,8 +36,8 @@ namespace Samirin33.NDMF.Components
                 return;
 
             var avatarRootTransform = avatarRoot.transform;
-            var components = maScripts.OfType<PreventingDuplicateObjects>().ToArray();
-            var componentsById = new Dictionary<string, List<PreventingDuplicateObjects>>();
+            var components = maScripts.OfType<PreventDuplicateObjects>().ToArray();
+            var componentsById = new Dictionary<string, List<PreventDuplicateObjects>>();
 
             foreach (var component in components)
             {
@@ -46,7 +46,7 @@ namespace Samirin33.NDMF.Components
 
                 if (!componentsById.TryGetValue(component.id, out var group))
                 {
-                    group = new List<PreventingDuplicateObjects>();
+                    group = new List<PreventDuplicateObjects>();
                     componentsById[component.id] = group;
                 }
 
@@ -60,7 +60,7 @@ namespace Samirin33.NDMF.Components
 
 #if UNITY_EDITOR
                 EditorUtility.DisplayDialog(
-                    "PreventingDuplicateObjects",
+                    "PreventDuplicateObjects",
                     $"{objectName}がアバター内で重複しています！ビルド結果が意図しないものになる可能性があるので{objectName}をアバター内で1つだけ存在するようにしてください。\n\n重複している階層:\n{hierarchyList}",
                     "閉じる");
 #endif
@@ -68,7 +68,7 @@ namespace Samirin33.NDMF.Components
                 foreach (var duplicate in group.Skip(1))
                 {
                     Debug.LogWarning(
-                        $"[PreventingDuplicateObjects] Removed duplicate GameObject \"{duplicate.gameObject.name}\" with id \"{duplicate.id}\" at \"{GetRelativePath(duplicate.transform, avatarRootTransform)}\"",
+                        $"[PreventDuplicateObjects] Removed duplicate GameObject \"{duplicate.gameObject.name}\" with id \"{duplicate.id}\" at \"{GetRelativePath(duplicate.transform, avatarRootTransform)}\"",
                         duplicate);
                     Object.DestroyImmediate(duplicate.gameObject);
                 }
@@ -82,7 +82,7 @@ namespace Samirin33.NDMF.Components
         }
 
         private static string BuildHierarchyList(
-            IReadOnlyList<PreventingDuplicateObjects> group,
+            IReadOnlyList<PreventDuplicateObjects> group,
             Transform avatarRoot)
         {
             var builder = new StringBuilder();

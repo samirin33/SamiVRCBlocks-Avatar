@@ -22,7 +22,7 @@ namespace Samirin33.NDMF.Components.Editor
 
         private const string EmptyMotionGUID = "4de039275b65be24c8f0a641d7a44924";
         private const string FPSCounterGUID = "9b06db4aacbe94745a2bcd84f67103eb";
-        private static string GeneratedFolder => "Assets/Generated/SamirinVRCUtility/ParameterSmoothing";
+        private static string GeneratedFolder => "Assets/Generated/SamiVRCBlocks/ParameterSmoothing";
 
         public static void Build(GameObject avatarRootObject, params ParameterSmoothing[] parameterSmoothings)
         {
@@ -30,7 +30,7 @@ namespace Samirin33.NDMF.Components.Editor
         }
 
         /// <summary>
-        /// インスペクターからのマニュアル生成。ModuleSetter（FPSCounter）は付けない。
+        /// インスペクターからのマニュアル生成。ExtendedParameters（FPSCounter）は付けない。
         /// </summary>
         public static AnimatorController[] BuildManual(GameObject avatarRootObject, params ParameterSmoothing[] parameterSmoothings)
         {
@@ -44,7 +44,7 @@ namespace Samirin33.NDMF.Components.Editor
                 return Array.Empty<AnimatorController>();
 
             var standaloneComponents = parameterSmoothings
-                .Where(c => c != null && !IsHandledByHalfSyncParam(c))
+                .Where(c => c != null && !IsHandledByResizableSyncParameters(c))
                 .ToArray();
             if (standaloneComponents.Length == 0)
                 return Array.Empty<AnimatorController>();
@@ -67,13 +67,13 @@ namespace Samirin33.NDMF.Components.Editor
                 : Array.Empty<AnimatorController>();
         }
 
-        private static bool IsHandledByHalfSyncParam(ParameterSmoothing component)
+        private static bool IsHandledByResizableSyncParameters(ParameterSmoothing component)
         {
-            var halfSyncParam = component.GetComponent<HalfSyncParam>();
-            if (halfSyncParam?.syncParamSettings == null)
+            var resizableSyncParam = component.GetComponent<ResizableSyncParameters>();
+            if (resizableSyncParam?.syncParamSettings == null)
                 return false;
 
-            return halfSyncParam.syncParamSettings.Any(s => s.paramType == HalfSyncParam.ParamType.Float);
+            return resizableSyncParam.syncParamSettings.Any(s => s.paramType == ResizableSyncParameters.ParamType.Float);
         }
 
         public static void EnsureFPSCounterModule(GameObject targetObject)
@@ -90,30 +90,43 @@ namespace Samirin33.NDMF.Components.Editor
                 return;
             }
 
-            var moduleSetter = targetObject.GetComponent<ModuleSetter>();
-            if (moduleSetter == null)
-                moduleSetter = targetObject.AddComponent<ModuleSetter>();
-            moduleSetter.modulePrefabs = new[] { fpsCounter };
+            var extendedParameters = targetObject.GetComponent<ExtendedParameters>();
+            if (extendedParameters == null)
+                extendedParameters = targetObject.AddComponent<ExtendedParameters>();
+
+            // 既存の parameterPrefabs を消さず FPSCounter を追加する
+            var list = new System.Collections.Generic.List<GameObject>();
+            if (extendedParameters.parameterPrefabs != null)
+            {
+                foreach (var prefab in extendedParameters.parameterPrefabs)
+                {
+                    if (prefab != null && !list.Contains(prefab))
+                        list.Add(prefab);
+                }
+            }
+            if (!list.Contains(fpsCounter))
+                list.Add(fpsCounter);
+            extendedParameters.parameterPrefabs = list.ToArray();
             EditorUtility.SetDirty(targetObject);
         }
 
-        private const string HalfSyncSmoothingModuleName = "HalfSyncParam_Smoothing_Module";
+        private const string ResizableSyncSmoothingModuleName = "ResizableSyncParameters_Smoothing_Module";
         private const string StandaloneSmoothingModuleName = "ParameterSmoothing_Module";
 
-        public static AnimatorController BuildFromHalfSyncParam(GameObject avatarRootObject,
+        public static AnimatorController BuildFromResizableSyncParameters(GameObject avatarRootObject,
             ParameterSmoothing.ParameterSmoothingInfo[] infos, GameObject moduleParent)
         {
-            return BuildFromInfos(avatarRootObject, infos, moduleParent, HalfSyncSmoothingModuleName, fromHalfSyncParam: true);
+            return BuildFromInfos(avatarRootObject, infos, moduleParent, ResizableSyncSmoothingModuleName, fromResizableSyncParameters: true);
         }
 
         public static AnimatorController BuildFromInfos(GameObject avatarRootObject, ParameterSmoothing.ParameterSmoothingInfo[] infos,
             GameObject moduleParent = null, string moduleObjectName = StandaloneSmoothingModuleName,
-            bool fromHalfSyncParam = false)
+            bool fromResizableSyncParameters = false)
         {
             if (avatarRootObject == null || infos == null || infos.Length == 0)
                 return null;
 
-            var controller = CreateControllerFromParameterSmoothingData(infos, out var paramNamesToRegister, fromHalfSyncParam);
+            var controller = CreateControllerFromParameterSmoothingData(infos, out var paramNamesToRegister, fromResizableSyncParameters);
             if (controller == null)
             {
                 Debug.LogError("[ParameterSmoothing] Animator Controller の生成に失敗しました。MA Merge Animator は登録されません。");
@@ -168,15 +181,15 @@ namespace Samirin33.NDMF.Components.Editor
         private static AnimatorController CreateControllerFromParameterSmoothingData(
             ParameterSmoothing.ParameterSmoothingInfo[] infos,
             out List<(string name, ParameterSyncType syncType)> paramNamesToRegister,
-            bool fromHalfSyncParam = false)
+            bool fromResizableSyncParameters = false)
         {
             paramNamesToRegister = new List<(string, ParameterSyncType)>();
 
             if (!Directory.Exists(GeneratedFolder))
                 Directory.CreateDirectory(GeneratedFolder);
 
-            var controllerPath = fromHalfSyncParam
-                ? $"{GeneratedFolder}/HalfSyncParam_Smoothing_Generated.controller"
+            var controllerPath = fromResizableSyncParameters
+                ? $"{GeneratedFolder}/ResizableSyncParameters_Smoothing_Generated.controller"
                 : $"{GeneratedFolder}/ParameterSmoothing_Generated.controller";
             if (AssetDatabase.LoadAssetAtPath<AnimatorController>(controllerPath) != null)
                 AssetDatabase.DeleteAsset(controllerPath);
@@ -208,14 +221,14 @@ namespace Samirin33.NDMF.Components.Editor
                 if (addedFixedWeightParams.Add(fixedWeightParamName))
                     controller.AddParameter(fixedWeightParamName, AnimatorControllerParameterType.Float);
 
-                if (!fromHalfSyncParam)
+                if (!fromResizableSyncParameters)
                 {
                     paramNamesToRegister.Add((paramName, ParameterSyncType.Float));
                     paramNamesToRegister.Add((smoothedParamName, ParameterSyncType.Float));
                 }
             }
 
-            if (!fromHalfSyncParam)
+            if (!fromResizableSyncParameters)
             {
                 foreach (var fixedWeightParamName in addedFixedWeightParams)
                     paramNamesToRegister.Add((fixedWeightParamName, ParameterSyncType.Float));
@@ -257,7 +270,7 @@ namespace Samirin33.NDMF.Components.Editor
             return new AnimatorControllerLayer
             {
                 name = "ParameterSmoothing",
-                defaultWeight = 0f,
+                defaultWeight = 1f,
                 stateMachine = rootSm
             };
         }
