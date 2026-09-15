@@ -158,7 +158,14 @@ namespace Samirin33.NDMF.Components
             if (buildPhase == SamirinBuildPhase.Optimizing && beforeModularAvatar)
             {
                 invokeReplaceBuilder?.Invoke(avatarRootObject, _MAScripts);
-                DestroyImmediate(this);
+
+                // 同一タイプは OnBuildSingle が代表1件にしか来ないため、渡された全インスタンスを破棄する
+                if (_MAScripts == null) return;
+                foreach (var script in _MAScripts)
+                {
+                    if (script != null)
+                        DestroyImmediate(script);
+                }
             }
         }
     }
