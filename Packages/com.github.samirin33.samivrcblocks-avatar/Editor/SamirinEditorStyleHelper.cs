@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.UIElements;
 
 namespace Samirin33.Editor
 {
@@ -315,6 +316,23 @@ namespace Samirin33.Editor
                 }
             }
             EditorGUILayout.EndVertical();
+        }
+
+        /// <summary>
+        /// 設定が有効なとき、UI Toolkit 要素へパッケージ付属フォントをインライン指定します。
+        /// USS のフォント指定より優先されます。
+        /// </summary>
+        public static void ApplyCustomFont(VisualElement element)
+        {
+            if (element == null || !SamirinEditorPreferences.UseCustomFont)
+                return;
+
+            var font = EditorFont;
+            if (font == null)
+                return;
+
+            element.style.unityFont = font;
+            element.style.unityFontDefinition = FontDefinition.FromFont(font);
         }
 
         public static void DrawHelpBoxWithDefaultFont(string message, MessageType type)
