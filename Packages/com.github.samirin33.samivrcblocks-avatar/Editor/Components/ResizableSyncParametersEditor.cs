@@ -13,6 +13,7 @@ namespace Samirin33.NDMF.Components.Editor
     {
         private SerializedProperty _syncParamSettings;
         private SerializedProperty _writeDefault;
+        private SerializedProperty _matchAvatarWriteDefaults;
         private SerializedProperty _replaceWithSmoothedInAnimator;
         private float _bulkSmoothWeight = 0.2f;
 
@@ -20,6 +21,7 @@ namespace Samirin33.NDMF.Components.Editor
         {
             _syncParamSettings = serializedObject.FindProperty("syncParamSettings");
             _writeDefault = serializedObject.FindProperty("writeDefault");
+            _matchAvatarWriteDefaults = serializedObject.FindProperty("matchAvatarWriteDefaults");
             _replaceWithSmoothedInAnimator = serializedObject.FindProperty("replaceWithSmoothedInAnimator");
         }
 
@@ -132,6 +134,33 @@ namespace Samirin33.NDMF.Components.Editor
                         if (!string.IsNullOrEmpty(description))
                             EditorGUILayout.HelpBox(description, MessageType.None);
 
+                        var fireValueChangedTriggerProp = element.FindPropertyRelative("fireValueChangedTrigger");
+                        EditorGUILayout.PropertyField(fireValueChangedTriggerProp, new GUIContent("値変化トリガー"));
+                        if (fireValueChangedTriggerProp != null && fireValueChangedTriggerProp.boolValue)
+                        {
+                            var triggerSourceName = string.IsNullOrEmpty(paramNameProp.stringValue)
+                                ? GetDefaultParamName(element)
+                                : paramNameProp.stringValue;
+                            var triggerName = ResizableSyncParameters.GetValueChangedTriggerName(triggerSourceName);
+                            EditorGUILayout.HelpBox(
+                                "同期段が変わったフレームにトリガーが有効になります。読み込み直後の初期値では発行しません。",
+                                MessageType.None);
+
+                            EditorGUILayout.BeginHorizontal();
+                            EditorGUILayout.LabelField(triggerName, GUILayout.ExpandWidth(true));
+                            if (GUILayout.Button("コピー", GUILayout.Width(50)))
+                                EditorGUIUtility.systemCopyBuffer = triggerName;
+                            EditorGUILayout.EndHorizontal();
+
+                            var stepCount = GetMaxValue(element) + 1;
+                            if (stepCount > 128)
+                            {
+                                EditorGUILayout.HelpBox(
+                                    $"同期段が {stepCount} あるため、トリガー用のステートも同数追加されます。",
+                                    MessageType.Warning);
+                            }
+                        }
+
                         if (paramType == ResizableSyncParameters.ParamType.Float)
                         {
                             var paramName = paramNameProp.stringValue;
@@ -195,7 +224,11 @@ namespace Samirin33.NDMF.Components.Editor
                 EditorGUILayout.Space(5);
 
                 EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+                EditorGUILayout.PropertyField(_matchAvatarWriteDefaults, new GUIContent("Write Defaultをアバターに合わせる"));
+                var matchAvatarWriteDefaults = _matchAvatarWriteDefaults != null && _matchAvatarWriteDefaults.boolValue;
+                EditorGUI.BeginDisabledGroup(matchAvatarWriteDefaults);
                 EditorGUILayout.PropertyField(_writeDefault, new GUIContent("生成されるステートのWrite Default"));
+                EditorGUI.EndDisabledGroup();
                 EditorGUILayout.PropertyField(_replaceWithSmoothedInAnimator, new GUIContent("Animator内のFloatパラメーターをSmoothedに置き換える"));
                 EditorGUILayout.EndVertical();
 

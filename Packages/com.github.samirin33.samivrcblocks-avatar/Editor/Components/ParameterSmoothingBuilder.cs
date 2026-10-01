@@ -114,14 +114,14 @@ namespace Samirin33.NDMF.Components.Editor
         private const string StandaloneSmoothingModuleName = "ParameterSmoothing_Module";
 
         public static AnimatorController BuildFromResizableSyncParameters(GameObject avatarRootObject,
-            ParameterSmoothing.ParameterSmoothingInfo[] infos, GameObject moduleParent)
+            ParameterSmoothing.ParameterSmoothingInfo[] infos, GameObject moduleParent, bool matchAvatarWriteDefaults = false)
         {
-            return BuildFromInfos(avatarRootObject, infos, moduleParent, ResizableSyncSmoothingModuleName, fromResizableSyncParameters: true);
+            return BuildFromInfos(avatarRootObject, infos, moduleParent, ResizableSyncSmoothingModuleName, fromResizableSyncParameters: true, matchAvatarWriteDefaults: matchAvatarWriteDefaults);
         }
 
         public static AnimatorController BuildFromInfos(GameObject avatarRootObject, ParameterSmoothing.ParameterSmoothingInfo[] infos,
             GameObject moduleParent = null, string moduleObjectName = StandaloneSmoothingModuleName,
-            bool fromResizableSyncParameters = false)
+            bool fromResizableSyncParameters = false, bool matchAvatarWriteDefaults = false)
         {
             if (avatarRootObject == null || infos == null || infos.Length == 0)
                 return null;
@@ -133,7 +133,7 @@ namespace Samirin33.NDMF.Components.Editor
                 return null;
             }
 
-            AddModularAvatarModule(moduleParent ?? avatarRootObject, controller, paramNamesToRegister, moduleObjectName);
+            AddModularAvatarModule(moduleParent ?? avatarRootObject, controller, paramNamesToRegister, moduleObjectName, matchAvatarWriteDefaults);
             return controller;
         }
 
@@ -484,14 +484,15 @@ namespace Samirin33.NDMF.Components.Editor
         }
 
         private static void AddModularAvatarModule(GameObject parentObject, AnimatorController controller,
-            List<(string name, ParameterSyncType syncType)> paramNamesToRegister, string moduleObjectName)
+            List<(string name, ParameterSyncType syncType)> paramNamesToRegister, string moduleObjectName,
+            bool matchAvatarWriteDefaults = false)
         {
             var moduleRoot = ModularAvatarMergeAnimatorUtility.RegisterMergeAnimatorModule(
                 parentObject,
                 moduleObjectName,
                 controller,
                 layerPriority: 0,
-                matchAvatarWriteDefaults: false);
+                matchAvatarWriteDefaults: matchAvatarWriteDefaults);
             if (moduleRoot == null)
             {
                 Debug.LogError("[ParameterSmoothing] MA Merge Animator の登録に失敗しました。Animator Controller の参照を確認してください。");

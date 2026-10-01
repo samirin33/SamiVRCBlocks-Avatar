@@ -4,6 +4,8 @@
     "references": [
         "VRC.SDKBase",
         "VRC.SDK3A",
+        "VRC.Dynamics",
+        "VRC.SDK3.Dynamics.Constraint",
         "nadena.dev.ndmf.runtime",
         "nadena.dev.modular-avatar.core"
     ],

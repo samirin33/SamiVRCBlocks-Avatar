@@ -5,14 +5,13 @@ using UnityEditor.Animations;
 using UnityEngine;
 using VRC.SDK3.Avatars.Components;
 using VRC.SDK3.Dynamics.Constraint.Components;
-using nadena.dev.ndmf.runtime;
 using Samirin33.NDMF.Components;
 using Samirin33.NDMF.Constraints;
 
 namespace Samirin33.NDMF.Components.Editor
 {
     /// <summary>
-    /// ControllableHumanoid の Proxy 構造生成とビルド時処理。
+    /// ControllableHumanoid のビルド時処理。
     /// </summary>
     [InitializeOnLoad]
     internal static class ControllableHumanoidProcessor
@@ -22,122 +21,6 @@ namespace Samirin33.NDMF.Components.Editor
             ControllableHumanoid.BuildHandler = Build;
             ControllableHumanoid.RemapFxHandler = RemapFxLayerPaths;
         }
-
-        #region Proxy structure (Editor)
-
-        public static void CreateHumanoidProxyStructure(ControllableHumanoid component)
-        {
-            if (component == null)
-                return;
-
-            var avatarRoot = RuntimeUtil.FindAvatarInParents(component.transform);
-            if (avatarRoot == null)
-            {
-                EditorUtility.DisplayDialog(
-                    "ControllableHumanoid",
-                    "アバタールートが見つかりません。アバター配下に配置してください。",
-                    "OK");
-                return;
-            }
-
-            if (!avatarRoot.TryGetComponent<Animator>(out var animator) || !animator.isHuman)
-            {
-                EditorUtility.DisplayDialog(
-                    "ControllableHumanoid",
-                    "Humanoid Animator が見つかりません。",
-                    "OK");
-                return;
-            }
-
-            avatarRoot.TryGetComponent<VRCAvatarDescriptor>(out var descriptor);
-            var humanoidBones = CollectHumanoidBones(animator, descriptor);
-            if (humanoidBones.Count == 0)
-            {
-                EditorUtility.DisplayDialog(
-                    "ControllableHumanoid",
-                    "ヒューマノイドボーンが空です。",
-                    "OK");
-                return;
-            }
-
-            Undo.RegisterFullObjectHierarchyUndo(component.gameObject, "Create Humanoid Proxy Structure");
-
-            ClearExistingProxyChildren(component);
-
-            var proxyByOriginal = new Dictionary<Transform, Transform>(humanoidBones.Count);
-            var entries = new List<ControllableHumanoid.BoneControlEntry>(humanoidBones.Count);
-
-            foreach (var kvp in humanoidBones)
-            {
-                var original = kvp.Key;
-                var bodyBone = kvp.Value;
-                var proxyGo = new GameObject(ControllableHumanoid.GetProxyObjectName(bodyBone));
-                Undo.RegisterCreatedObjectUndo(proxyGo, "Create Proxy");
-
-                var proxy = proxyGo.transform;
-                proxy.SetParent(component.transform, false);
-                proxy.SetPositionAndRotation(original.position, original.rotation);
-                proxy.localScale = Vector3.one;
-
-                proxyByOriginal[original] = proxy;
-                entries.Add(new ControllableHumanoid.BoneControlEntry
-                {
-                    bone = bodyBone,
-                    source = proxy,
-                    target = proxy,
-                });
-            }
-
-            foreach (var kvp in humanoidBones)
-            {
-                var original = kvp.Key;
-                var proxy = proxyByOriginal[original];
-                var humanoidParent = FindHumanoidParent(original, humanoidBones);
-
-                if (humanoidParent != null && proxyByOriginal.TryGetValue(humanoidParent, out var parentProxy))
-                    proxy.SetParent(parentProxy, true);
-                else
-                    proxy.SetParent(component.transform, true);
-            }
-
-            Undo.RecordObject(component, "Assign Bone Controls");
-            component.boneControls = entries;
-            EditorUtility.SetDirty(component);
-        }
-
-        private static void ClearExistingProxyChildren(ControllableHumanoid component)
-        {
-            var toDestroy = new List<GameObject>();
-            for (var i = 0; i < component.transform.childCount; i++)
-            {
-                var child = component.transform.GetChild(i);
-                if (child.name.StartsWith(ControllableHumanoid.ProxyNamePrefix, StringComparison.Ordinal))
-                    toDestroy.Add(child.gameObject);
-            }
-
-            foreach (var go in toDestroy)
-            {
-                if (go != null)
-                    Undo.DestroyObjectImmediate(go);
-            }
-        }
-
-        private static Transform FindHumanoidParent(
-            Transform bone,
-            Dictionary<Transform, HumanBodyBones> humanoidBones)
-        {
-            var parent = bone.parent;
-            while (parent != null)
-            {
-                if (humanoidBones.ContainsKey(parent))
-                    return parent;
-                parent = parent.parent;
-            }
-
-            return null;
-        }
-
-        #endregion
 
         #region Build
 
@@ -184,32 +67,37 @@ namespace Samirin33.NDMF.Components.Editor
                 return;
             }
 
-            var controlByBone = BuildControlLookup(component);
-            if (controlByBone.Count == 0)
-            {
-                Debug.LogWarning(
-                    "[ControllableHumanoid] Source/Target が未設定です。「ヒューマノイド構造を追加」を実行してください。",
-                    component);
-                return;
-            }
-
             var avatarRoot = avatarRootObject.transform;
-            var oldPaths = new Dictionary<Transform, string>(humanoidBones.Count);
-            var oldLocalScales = new Dictionary<Transform, Vector3>(humanoidBones.Count);
-            foreach (var bone in humanoidBones.Keys)
+            var oldPaths = new Dictionary<Transform, string>();
+            TrackHierarchy(armatureRoot, avatarRoot, oldPaths);
+            if (component.links != null)
             {
-                oldPaths[bone] = AnimationUtility.CalculateTransformPath(bone, avatarRoot);
-                oldLocalScales[bone] = bone.localScale;
+                foreach (var entry in component.links)
+                {
+                    if (entry?.parentChild != null)
+                        TrackHierarchy(entry.parentChild, avatarRoot, oldPaths);
+                }
             }
 
-            // ヒューマノイドボーンを複製（元の名前のまま Armature 配下へ）
+            if (component.playerFollowObjects != null)
+            {
+                foreach (var entry in component.playerFollowObjects)
+                {
+                    if (entry?.target != null)
+                        TrackHierarchy(entry.target, avatarRoot, oldPaths);
+                }
+            }
+
+            var clonedArmature = new GameObject(armatureRoot.name).transform;
+            clonedArmature.SetParent(armatureRoot.parent, false);
+            TransformMath.CopyLocalPose(armatureRoot, clonedArmature);
+
             var boneMap = new Dictionary<Transform, Transform>(humanoidBones.Count);
             foreach (var kvp in humanoidBones)
             {
                 var original = kvp.Key;
-                var clonedGo = new GameObject(original.name);
-                var cloned = clonedGo.transform;
-                cloned.SetPositionAndRotation(original.position, original.rotation);
+                var cloned = new GameObject(original.name).transform;
+                cloned.SetParent(clonedArmature, false);
                 boneMap[original] = cloned;
             }
 
@@ -219,68 +107,90 @@ namespace Samirin33.NDMF.Components.Editor
                 var cloned = kvp.Value;
                 var parent = original.parent;
 
-                if (parent != null && boneMap.TryGetValue(parent, out var clonedParent))
-                    cloned.SetParent(clonedParent, true);
-                else
-                    cloned.SetParent(armatureRoot, true);
-
-                if (oldLocalScales.TryGetValue(original, out var localScale))
-                    cloned.localScale = localScale;
-            }
-
-            // アバター直下に OriginalBone を生成し、オリジナル Hips をその子へ
-            var originalBoneRoot = new GameObject(ControllableHumanoid.OriginalBoneRootName).transform;
-            originalBoneRoot.SetParent(avatarRoot, false);
-            originalBoneRoot.localPosition = Vector3.zero;
-            originalBoneRoot.localRotation = Quaternion.identity;
-            originalBoneRoot.localScale = Vector3.one;
-            hipsBone.SetParent(originalBoneRoot, true);
-
-            // コンポーネント自身 → Armature ルートへ Parent 追従（Proxy_Hips と同様 / SolveInLocalSpace・最上位）
-            AddProxyFollowParentConstraint(component.gameObject, armatureRoot);
-
-            foreach (var kvp in humanoidBones)
-            {
-                var original = kvp.Key;
-                var bodyBone = kvp.Value;
-                var cloned = boneMap[original];
-
-                original.name = bodyBone.ToString();
-
-                if (!controlByBone.TryGetValue(bodyBone, out var entry) || entry == null)
+                if (parent == armatureRoot)
                 {
-                    Debug.LogWarning(
-                        $"[ControllableHumanoid] {bodyBone} の Source/Target が未設定のため Constraint をスキップします。",
-                        component);
+                    cloned.SetParent(clonedArmature, false);
+                    TransformMath.CopyLocalPose(original, cloned);
                     continue;
                 }
 
-                var source = entry.source;
-                var target = entry.ResolvedTarget;
-
-                // 複製ヒューマノイド → 制御用: Source に Constraint（Hips は Parent、他は Rotation）
-                if (source != null)
+                if (parent != null && boneMap.TryGetValue(parent, out var clonedParentBone))
                 {
-                    if (bodyBone == HumanBodyBones.Hips)
-                        AddProxyFollowParentConstraint(source.gameObject, cloned);
-                    else
-                        AddProxyFollowRotationConstraint(source.gameObject, cloned);
+                    cloned.SetParent(clonedParentBone, false);
+                    TransformMath.CopyLocalPose(original, cloned);
+                    continue;
                 }
 
-                // 制御 → オリジナル: Target に Parent / Scale（TargetTransform = オリジナル、Source = Target 自身）
-                if (target != null)
+                var ancestor = NearestHumanoidAncestor(original, humanoidBones);
+                if (ancestor != null && boneMap.TryGetValue(ancestor, out var clonedAncestor))
                 {
-                    AddVrcParentConstraint(target, original);
-                    AddVrcScaleConstraint(target, original);
+                    cloned.SetParent(clonedAncestor, false);
+                    TransformMath.CopyWorldPose(original, cloned);
                 }
-
-                if (bodyBone == HumanBodyBones.Head && component.addHeadChop)
-                    AddHeadChop(original);
+                else
+                {
+                    cloned.SetParent(clonedArmature, false);
+                    TransformMath.CopyWorldPose(original, cloned);
+                }
             }
 
-            var remaps = new List<ControllableHumanoid.PathRemapEntry>(humanoidBones.Count);
+            var originalArmature = new GameObject(ControllableHumanoid.OriginalArmatureName).transform;
+            originalArmature.SetParent(avatarRoot, false);
+            originalArmature.localPosition = Vector3.zero;
+            originalArmature.localRotation = Quaternion.identity;
+            originalArmature.localScale = Vector3.one;
+            var armatureWorldPosition = TransformMath.GetWorldPosition(armatureRoot);
+            var armatureWorldRotation = TransformMath.GetWorldRotation(armatureRoot);
+            var armatureWorldScale = TransformMath.GetWorldScale(armatureRoot);
+            armatureRoot.SetParent(originalArmature, false);
+            TransformMath.SetWorldPose(armatureRoot, armatureWorldPosition, armatureWorldRotation, armatureWorldScale);
+
+            var originalByBone = new Dictionary<HumanBodyBones, Transform>(humanoidBones.Count);
+            foreach (var kvp in humanoidBones)
+                originalByBone[kvp.Value] = kvp.Key;
+
+            var sourceConstraints = new List<Behaviour>();
+            var boneApplyConstraints = new List<ControllableHumanoid.BoneApplyConstraint>();
+            if (component.links != null)
+            {
+                foreach (var entry in component.links)
+                    ApplyLink(entry, armatureRoot, clonedArmature, originalByBone, boneMap, humanoidBones);
+            }
+
+            foreach (var kvp in boneMap)
+            {
+                if (!humanoidBones.TryGetValue(kvp.Key, out var bodyBone))
+                    continue;
+
+                var follow = AddProxyFollowParentConstraint(kvp.Key.gameObject, kvp.Value);
+                if (follow == null)
+                    continue;
+
+                var boneEnabled = component.boneApply == null || component.boneApply.IsEnabled(bodyBone);
+                follow.enabled = component.sourceApplyEnabled;
+                SetConstraintActive(follow, boneEnabled);
+                sourceConstraints.Add(follow);
+                boneApplyConstraints.Add(new ControllableHumanoid.BoneApplyConstraint
+                {
+                    bone = bodyBone,
+                    constraint = follow,
+                });
+            }
+
+            component.BuiltHeadChop = null;
+            if (component.addHeadChop
+                && originalByBone.TryGetValue(HumanBodyBones.Head, out var head)
+                && head != null)
+                component.BuiltHeadChop = AddHeadChop(head, component.headChopGlobalScaleFactor);
+
+            PlacePlayerFollowObjects(component, originalByBone, boneMap);
+
+            var remaps = new List<ControllableHumanoid.PathRemapEntry>(oldPaths.Count);
             foreach (var kvp in oldPaths)
             {
+                if (kvp.Key == null)
+                    continue;
+
                 var newPath = AnimationUtility.CalculateTransformPath(kvp.Key, avatarRoot);
                 if (string.IsNullOrEmpty(kvp.Value) || kvp.Value == newPath)
                     continue;
@@ -294,86 +204,225 @@ namespace Samirin33.NDMF.Components.Editor
 
             remaps.Sort((a, b) => b.oldPath.Length.CompareTo(a.oldPath.Length));
             component.PendingPathRemaps = remaps;
+            component.SourceApplyConstraints = sourceConstraints;
+            component.BoneApplyConstraints = boneApplyConstraints;
 
             RemapFxLayerPaths(component, avatarRootObject);
         }
 
-        private static Dictionary<HumanBodyBones, ControllableHumanoid.BoneControlEntry> BuildControlLookup(
-            ControllableHumanoid component)
+        private static void TrackHierarchy(Transform root, Transform avatarRoot, Dictionary<Transform, string> paths)
         {
-            var result = new Dictionary<HumanBodyBones, ControllableHumanoid.BoneControlEntry>();
-            if (component.boneControls == null)
-                return result;
+            if (root == null || root == avatarRoot || paths.ContainsKey(root))
+                return;
 
-            foreach (var entry in component.boneControls)
+            paths[root] = AnimationUtility.CalculateTransformPath(root, avatarRoot);
+            for (var i = 0; i < root.childCount; i++)
+                TrackHierarchy(root.GetChild(i), avatarRoot, paths);
+        }
+
+        private static void ApplyLink(
+            ControllableHumanoid.BoneLinkEntry entry,
+            Transform armatureRoot,
+            Transform clonedArmature,
+            Dictionary<HumanBodyBones, Transform> originalByBone,
+            Dictionary<Transform, Transform> boneMap,
+            Dictionary<Transform, HumanBodyBones> humanoidBones)
+        {
+            if (entry == null || !entry.IsComplete)
+                return;
+
+            Transform originalParent;
+            Transform clonedParent;
+            if (entry.parentIsRoot)
             {
-                if (entry == null || entry.source == null)
-                    continue;
-                result[entry.bone] = entry;
+                originalParent = armatureRoot;
+                clonedParent = clonedArmature;
+            }
+            else if (!originalByBone.TryGetValue(entry.parentBone, out originalParent) || originalParent == null)
+            {
+                return;
+            }
+            else if (!boneMap.TryGetValue(originalParent, out clonedParent) || clonedParent == null)
+            {
+                return;
             }
 
+            var parentChild = entry.parentChild;
+            if (parentChild == null || parentChild == originalParent)
+                return;
+            if (IsUnder(originalParent, parentChild))
+                return;
+
+            var clonedWorldPosition = TransformMath.GetWorldPosition(clonedParent);
+            var clonedWorldRotation = TransformMath.GetWorldRotation(clonedParent);
+            var clonedWorldScale = TransformMath.GetWorldScale(clonedParent);
+            parentChild.SetParent(originalParent, false);
+            TransformMath.SetWorldPose(parentChild, clonedWorldPosition, clonedWorldRotation, clonedWorldScale);
+
+            var children = new List<Transform>();
+            foreach (var child in humanoidBones.Keys)
+            {
+                if (child == null || child == originalParent || child == parentChild)
+                    continue;
+                if (NearestHumanoidAncestor(child, humanoidBones) != originalParent)
+                    continue;
+                children.Add(child);
+            }
+
+            children.Sort((a, b) => a.GetSiblingIndex().CompareTo(b.GetSiblingIndex()));
+            if (entry.shareChildParent)
+            {
+                foreach (var child in children)
+                    PlaceChild(child, entry.childParent, entry.keepLocal);
+                return;
+            }
+
+            if (entry.childParents == null)
+                return;
+
+            var slots = new Dictionary<HumanBodyBones, ControllableHumanoid.BoneLinkEntry.ChildParentEntry>();
+            foreach (var slot in entry.childParents)
+            {
+                if (slot == null || slot.childParent == null || !ControllableHumanoid.BoneLinkEntry.IsBone(slot.bone))
+                    continue;
+                slots[slot.bone] = slot;
+            }
+
+            foreach (var child in children)
+            {
+                if (!humanoidBones.TryGetValue(child, out var bone))
+                    continue;
+                if (!slots.TryGetValue(bone, out var slot))
+                    continue;
+                PlaceChild(child, slot.childParent, slot.keepLocal);
+            }
+        }
+
+        private static void PlaceChild(Transform bone, Transform parent, bool keepLocal)
+        {
+            if (bone == null || parent == null || bone == parent)
+                return;
+            if (IsUnder(parent, bone))
+                return;
+
+            if (keepLocal)
+            {
+                bone.SetParent(parent, false);
+                return;
+            }
+
+            var localPosition = bone.localPosition;
+            var localRotation = bone.localRotation;
+            var localScale = bone.localScale;
+
+            var cancel = new GameObject(bone.name + "_LocalCancel").transform;
+            cancel.SetParent(parent, false);
+            SetInverseLocal(cancel, localPosition, localRotation, localScale);
+            bone.SetParent(cancel, false);
+        }
+
+        /// <summary>
+        /// cancel のローカル姿勢と bone のローカル姿勢の合成が恒等になるようにする。
+        /// </summary>
+        private static void SetInverseLocal(Transform cancel, Vector3 position, Quaternion rotation, Vector3 scale)
+        {
+            var inverseScale = new Vector3(InverseScale(scale.x), InverseScale(scale.y), InverseScale(scale.z));
+            var inverseRotation = Quaternion.Inverse(rotation);
+            cancel.localScale = inverseScale;
+            cancel.localRotation = inverseRotation;
+            cancel.localPosition = -(inverseRotation * Vector3.Scale(position, inverseScale));
+        }
+
+        private static float InverseScale(float scale)
+        {
+            if (Mathf.Abs(scale) < 1e-6f)
+                return 0f;
+            return 1f / scale;
+        }
+
+        public static List<HumanBodyBones> CollectDirectHumanoidChildren(
+            Animator animator,
+            VRCAvatarDescriptor descriptor,
+            bool parentIsRoot,
+            HumanBodyBones parentBone)
+        {
+            if (animator == null || !animator.isHuman)
+                return null;
+
+            var humanoidBones = CollectHumanoidBones(animator, descriptor);
+            Transform parent = null;
+            if (parentIsRoot)
+            {
+                parent = animator.GetBoneTransform(HumanBodyBones.Hips)?.parent;
+            }
+            else
+            {
+                foreach (var pair in humanoidBones)
+                {
+                    if (pair.Value != parentBone)
+                        continue;
+                    parent = pair.Key;
+                    break;
+                }
+            }
+
+            var result = new List<HumanBodyBones>();
+            if (parent == null)
+                return result;
+
+            var children = new List<(HumanBodyBones bone, int sibling)>();
+            foreach (var pair in humanoidBones)
+            {
+                if (pair.Key == null || pair.Key == parent)
+                    continue;
+                if (NearestHumanoidAncestor(pair.Key, humanoidBones) != parent)
+                    continue;
+                children.Add((pair.Value, pair.Key.GetSiblingIndex()));
+            }
+
+            children.Sort((a, b) => a.sibling.CompareTo(b.sibling));
+            foreach (var child in children)
+                result.Add(child.bone);
             return result;
         }
 
-        private static void AddVrcParentConstraint(Transform host, Transform original)
+        private static Transform NearestHumanoidAncestor(
+            Transform bone,
+            Dictionary<Transform, HumanBodyBones> humanoidBones)
         {
-            // Source 側の追従用 ParentConstraint と共存するため常に新規追加
-            var raw = host.gameObject.AddComponent<VRCParentConstraint>();
-            var wrapper = AllConstraint.FromComponent(raw) as VRCParentConstraintWrapper;
-            if (wrapper == null)
-                return;
+            var parent = bone.parent;
+            while (parent != null)
+            {
+                if (humanoidBones.ContainsKey(parent))
+                    return parent;
+                parent = parent.parent;
+            }
 
-            wrapper.TargetTransform = original;
-            wrapper.AddSource(host, 1f);
-            wrapper.IsActive = true;
-            wrapper.Locked = true;
-            wrapper.ActivateConstraint();
+            return bone.parent;
         }
 
-        private static void AddVrcScaleConstraint(Transform host, Transform original)
+        private static bool IsUnder(Transform node, Transform ancestor)
         {
-            var raw = host.gameObject.AddComponent<VRCScaleConstraint>();
-            var wrapper = AllConstraint.FromComponent(raw) as VRCScaleConstraintWrapper;
-            if (wrapper == null)
-                return;
+            while (node != null)
+            {
+                if (node == ancestor)
+                    return true;
+                node = node.parent;
+            }
 
-            wrapper.TargetTransform = original;
-            wrapper.AddSource(host, 1f);
-            wrapper.IsActive = true;
-            wrapper.Locked = true;
-            wrapper.ActivateConstraint();
-        }
-
-        /// <summary>
-        /// Proxy が複製ボーンの回転に追従（SolveInLocalSpace、コンポーネント最上位）。
-        /// </summary>
-        private static void AddProxyFollowRotationConstraint(GameObject proxy, Transform clonedBone)
-        {
-            // 制御用の Constraint と共存するため常に新規追加
-            var raw = proxy.AddComponent<VRCRotationConstraint>();
-            var wrapper = AllConstraint.FromComponent(raw) as VRCRotationConstraintWrapper;
-            if (wrapper == null)
-                return;
-
-            wrapper.TargetTransform = null;
-            wrapper.SolveInLocalSpace = true;
-            wrapper.AddSource(clonedBone, 1f);
-            wrapper.IsActive = true;
-            wrapper.Locked = true;
-            wrapper.ActivateConstraint();
-            MoveComponentToTop(raw);
+            return false;
         }
 
         /// <summary>
-        /// Proxy_Hips が複製 Hips に Parent 追従（SolveInLocalSpace、コンポーネント最上位）。
+        /// 複製ボーンに Parent 追従する。
         /// </summary>
-        private static void AddProxyFollowParentConstraint(GameObject proxy, Transform clonedBone)
+        private static Behaviour AddProxyFollowParentConstraint(GameObject proxy, Transform clonedBone)
         {
             // 制御用の ParentConstraint と共存するため常に新規追加
             var raw = proxy.AddComponent<VRCParentConstraint>();
             var wrapper = AllConstraint.FromComponent(raw) as VRCParentConstraintWrapper;
             if (wrapper == null)
-                return;
+                return null;
 
             wrapper.TargetTransform = null;
             wrapper.SolveInLocalSpace = true;
@@ -382,6 +431,16 @@ namespace Samirin33.NDMF.Components.Editor
             wrapper.Locked = true;
             wrapper.ActivateConstraint();
             MoveComponentToTop(raw);
+            return raw;
+        }
+
+        private static void SetConstraintActive(Behaviour constraint, bool active)
+        {
+            var wrapper = AllConstraint.FromComponent(constraint);
+            if (wrapper == null)
+                return;
+
+            wrapper.IsActive = active;
         }
 
         private static void MoveComponentToTop(Component component)
@@ -397,7 +456,36 @@ namespace Samirin33.NDMF.Components.Editor
             }
         }
 
-        private static void AddHeadChop(Transform head)
+        private static void PlacePlayerFollowObjects(
+            ControllableHumanoid component,
+            Dictionary<HumanBodyBones, Transform> originalByBone,
+            Dictionary<Transform, Transform> boneMap)
+        {
+            if (component.playerFollowObjects == null)
+                return;
+
+            foreach (var entry in component.playerFollowObjects)
+            {
+                if (entry == null || entry.target == null)
+                    continue;
+                if (!ControllableHumanoid.BoneLinkEntry.IsBone(entry.bone))
+                    continue;
+                if (!originalByBone.TryGetValue(entry.bone, out var original) || original == null)
+                    continue;
+                if (!boneMap.TryGetValue(original, out var cloned) || cloned == null)
+                    continue;
+                if (entry.target == cloned || IsUnder(cloned, entry.target))
+                    continue;
+
+                var worldPosition = TransformMath.GetWorldPosition(entry.target);
+                var worldRotation = TransformMath.GetWorldRotation(entry.target);
+                var worldScale = TransformMath.GetWorldScale(entry.target);
+                entry.target.SetParent(cloned, false);
+                TransformMath.SetWorldPose(entry.target, worldPosition, worldRotation, worldScale);
+            }
+        }
+
+        private static Behaviour AddHeadChop(Transform head, float globalScaleFactor)
         {
             var headChop = head.gameObject.GetComponent<VRCHeadChop>();
             if (headChop == null)
@@ -411,7 +499,8 @@ namespace Samirin33.NDMF.Components.Editor
                     scaleFactor = 1f,
                 },
             };
-            headChop.globalScaleFactor = 0f;
+            headChop.globalScaleFactor = Mathf.Clamp01(globalScaleFactor);
+            return headChop;
         }
 
         #endregion
@@ -430,6 +519,8 @@ namespace Samirin33.NDMF.Components.Editor
             {
                 var bodyBone = (HumanBodyBones)i;
                 Transform bone = animator.GetBoneTransform(bodyBone);
+                if (bone == null)
+                    continue;
 
                 if (descriptor != null)
                 {
@@ -457,16 +548,209 @@ namespace Samirin33.NDMF.Components.Editor
 
         public static void RemapFxLayerPaths(ControllableHumanoid component, GameObject avatarRootObject)
         {
-            if (component?.PendingPathRemaps == null || component.PendingPathRemaps.Count == 0)
+            if (component == null || avatarRootObject == null)
                 return;
 
-            var fx = VRCAvatarDescriptorControllerUtility.GetController(
+            if (component.PendingPathRemaps != null && component.PendingPathRemaps.Count > 0)
+            {
+                var controllers = VRCAvatarDescriptorControllerUtility.GetControllers(
+                    avatarRootObject,
+                    VRCAvatarDescriptor.AnimLayerType.Base,
+                    VRCAvatarDescriptor.AnimLayerType.Additive,
+                    VRCAvatarDescriptor.AnimLayerType.Gesture,
+                    VRCAvatarDescriptor.AnimLayerType.Action,
+                    VRCAvatarDescriptor.AnimLayerType.FX);
+                foreach (var controller in controllers)
+                    RemapControllerPaths(controller, component.PendingPathRemaps);
+            }
+
+            ExpandConstraintToggleAnimations(component, avatarRootObject);
+        }
+
+        private struct ConstraintToggleBinding
+        {
+            public string path;
+            public Type type;
+            public string propertyName;
+        }
+
+        private static readonly string[] ActivePropertyCandidates =
+        {
+            "IsActive",
+            "m_IsActive",
+            "_isActive",
+            "m_Active",
+        };
+
+        private static void ExpandConstraintToggleAnimations(ControllableHumanoid component, GameObject avatarRootObject)
+        {
+            var avatarRoot = avatarRootObject.transform;
+            var componentPath = AnimationUtility.CalculateTransformPath(component.transform, avatarRoot);
+            var sourceBindings = BuildToggleBindings(component.SourceApplyConstraints, avatarRoot, "m_Enabled");
+            var boneBindings = BuildBoneToggleBindings(component.BoneApplyConstraints, avatarRoot);
+            var headChopBinding = BuildHeadChopBinding(component.BuiltHeadChop, avatarRoot);
+
+            var controllers = VRCAvatarDescriptorControllerUtility.GetControllers(
                 avatarRootObject,
+                VRCAvatarDescriptor.AnimLayerType.Base,
+                VRCAvatarDescriptor.AnimLayerType.Additive,
+                VRCAvatarDescriptor.AnimLayerType.Gesture,
+                VRCAvatarDescriptor.AnimLayerType.Action,
                 VRCAvatarDescriptor.AnimLayerType.FX);
-            if (fx == null)
+
+            var remaps = component.PendingPathRemaps;
+            foreach (var controller in controllers)
+            {
+                foreach (var clip in CollectReferencedClips(controller))
+                    ExpandClipToggles(clip, componentPath, remaps, sourceBindings, boneBindings, headChopBinding);
+            }
+        }
+
+        private static List<ConstraintToggleBinding> BuildToggleBindings(List<Behaviour> constraints, Transform avatarRoot)
+        {
+            return BuildToggleBindings(constraints, avatarRoot, null);
+        }
+
+        private static List<ConstraintToggleBinding> BuildToggleBindings(
+            List<Behaviour> constraints,
+            Transform avatarRoot,
+            string propertyNameOverride)
+        {
+            var result = new List<ConstraintToggleBinding>();
+            if (constraints == null)
+                return result;
+
+            var seen = new HashSet<string>();
+            foreach (var constraint in constraints)
+            {
+                if (constraint == null)
+                    continue;
+
+                var path = AnimationUtility.CalculateTransformPath(constraint.transform, avatarRoot);
+                var propertyName = string.IsNullOrEmpty(propertyNameOverride)
+                    ? ResolveActivePropertyName(constraint)
+                    : propertyNameOverride;
+                var key = path + "\n" + constraint.GetType().FullName + "\n" + propertyName;
+                if (!seen.Add(key))
+                    continue;
+
+                result.Add(new ConstraintToggleBinding
+                {
+                    path = path,
+                    type = constraint.GetType(),
+                    propertyName = propertyName,
+                });
+            }
+
+            return result;
+        }
+
+        private static Dictionary<string, List<ConstraintToggleBinding>> BuildBoneToggleBindings(
+            List<ControllableHumanoid.BoneApplyConstraint> constraints,
+            Transform avatarRoot)
+        {
+            var result = new Dictionary<string, List<ConstraintToggleBinding>>();
+            if (constraints == null)
+                return result;
+
+            foreach (var entry in constraints)
+            {
+                if (entry.constraint == null)
+                    continue;
+
+                var key = ControllableHumanoid.BoneApplyPrefix + entry.bone;
+                result[key] = BuildToggleBindings(new List<Behaviour> { entry.constraint }, avatarRoot);
+            }
+
+            return result;
+        }
+
+        private static ConstraintToggleBinding? BuildHeadChopBinding(Behaviour headChop, Transform avatarRoot)
+        {
+            if (headChop == null)
+                return null;
+
+            return new ConstraintToggleBinding
+            {
+                path = AnimationUtility.CalculateTransformPath(headChop.transform, avatarRoot),
+                type = typeof(VRCHeadChop),
+                propertyName = "globalScaleFactor",
+            };
+        }
+
+        private static string ResolveActivePropertyName(Behaviour constraint)
+        {
+            var serialized = new SerializedObject(constraint);
+            foreach (var candidate in ActivePropertyCandidates)
+            {
+                var property = serialized.FindProperty(candidate);
+                if (property != null && property.propertyType == SerializedPropertyType.Boolean)
+                    return candidate;
+            }
+
+            return "IsActive";
+        }
+
+        private static void ExpandClipToggles(
+            AnimationClip clip,
+            string componentPath,
+            List<ControllableHumanoid.PathRemapEntry> remaps,
+            List<ConstraintToggleBinding> sourceBindings,
+            Dictionary<string, List<ConstraintToggleBinding>> boneBindings,
+            ConstraintToggleBinding? headChopBinding)
+        {
+            if (clip == null)
                 return;
 
-            RemapControllerPaths(fx, component.PendingPathRemaps);
+            var bindings = AnimationUtility.GetCurveBindings(clip);
+            var changed = false;
+            foreach (var binding in bindings)
+            {
+                if (binding.type != typeof(ControllableHumanoid))
+                    continue;
+
+                var path = binding.path ?? string.Empty;
+                var remappedPath = RemapPath(path, remaps);
+                if (path != componentPath && remappedPath != componentPath)
+                    continue;
+
+                List<ConstraintToggleBinding> targets = null;
+                ConstraintToggleBinding? singleTarget = null;
+                if (binding.propertyName == ControllableHumanoid.SourceApplyEnabledProperty)
+                    targets = sourceBindings;
+                else if (binding.propertyName == ControllableHumanoid.HeadChopGlobalScaleProperty)
+                    singleTarget = headChopBinding;
+                else if (boneBindings == null
+                    || !boneBindings.TryGetValue(binding.propertyName, out targets))
+                    continue;
+
+                var curve = AnimationUtility.GetEditorCurve(clip, binding);
+                AnimationUtility.SetEditorCurve(clip, binding, null);
+                changed = true;
+
+                if (curve == null)
+                    continue;
+
+                if (singleTarget.HasValue)
+                {
+                    var target = singleTarget.Value;
+                    var updated = EditorCurveBinding.FloatCurve(target.path, target.type, target.propertyName);
+                    AnimationUtility.SetEditorCurve(clip, updated, curve);
+                    continue;
+                }
+
+                if (targets == null || targets.Count == 0)
+                    continue;
+
+                foreach (var target in targets)
+                {
+                    var updated = EditorCurveBinding.FloatCurve(target.path, target.type, target.propertyName);
+                    AnimationUtility.SetEditorCurve(clip, updated, curve);
+                }
+            }
+
+            if (changed)
+                EditorUtility.SetDirty(clip);
         }
 
         private static void RemapControllerPaths(

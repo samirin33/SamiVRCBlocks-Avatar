@@ -15,6 +15,14 @@ namespace Samirin33.NDMF.Components.Editor
         private SerializedProperty _showSphere;
         private SerializedProperty _sphereRadius;
         private SerializedProperty _sphereColor;
+        private SerializedProperty _showBox;
+        private SerializedProperty _boxSize;
+        private SerializedProperty _boxColor;
+        private SerializedProperty _showCapsule;
+        private SerializedProperty _capsuleRadius;
+        private SerializedProperty _capsuleHeight;
+        private SerializedProperty _capsuleDirection;
+        private SerializedProperty _capsuleColor;
         private SerializedProperty _arrows;
         private SerializedProperty _showLabel;
         private SerializedProperty _labelText;
@@ -35,6 +43,14 @@ namespace Samirin33.NDMF.Components.Editor
             _showSphere = serializedObject.FindProperty(nameof(TuningObject.showSphere));
             _sphereRadius = serializedObject.FindProperty(nameof(TuningObject.sphereRadius));
             _sphereColor = serializedObject.FindProperty(nameof(TuningObject.sphereColor));
+            _showBox = serializedObject.FindProperty(nameof(TuningObject.showBox));
+            _boxSize = serializedObject.FindProperty(nameof(TuningObject.boxSize));
+            _boxColor = serializedObject.FindProperty(nameof(TuningObject.boxColor));
+            _showCapsule = serializedObject.FindProperty(nameof(TuningObject.showCapsule));
+            _capsuleRadius = serializedObject.FindProperty(nameof(TuningObject.capsuleRadius));
+            _capsuleHeight = serializedObject.FindProperty(nameof(TuningObject.capsuleHeight));
+            _capsuleDirection = serializedObject.FindProperty(nameof(TuningObject.capsuleDirection));
+            _capsuleColor = serializedObject.FindProperty(nameof(TuningObject.capsuleColor));
             _arrows = serializedObject.FindProperty(nameof(TuningObject.arrows));
             _showLabel = serializedObject.FindProperty(nameof(TuningObject.showLabel));
             _labelText = serializedObject.FindProperty(nameof(TuningObject.labelText));
@@ -78,6 +94,10 @@ namespace Samirin33.NDMF.Components.Editor
                 EditorGUILayout.Space(8);
                 DrawSphereSection();
                 EditorGUILayout.Space(4);
+                DrawBoxSection();
+                EditorGUILayout.Space(4);
+                DrawCapsuleSection();
+                EditorGUILayout.Space(4);
                 EditorGUILayout.PropertyField(_arrows, new GUIContent("Arrows"), true);
                 EditorGUILayout.Space(4);
                 DrawLabelSection();
@@ -108,6 +128,34 @@ namespace Samirin33.NDMF.Components.Editor
             EditorGUI.indentLevel++;
             EditorGUILayout.PropertyField(_sphereRadius, new GUIContent("Sphere Radius"));
             EditorGUILayout.PropertyField(_sphereColor, new GUIContent("Sphere Color"));
+            EditorGUI.indentLevel--;
+        }
+
+        private void DrawBoxSection()
+        {
+            EditorGUILayout.LabelField("Center Box", EditorStyles.boldLabel);
+            EditorGUILayout.PropertyField(_showBox, new GUIContent("Show Box"));
+            if (!_showBox.boolValue && !_showBox.hasMultipleDifferentValues)
+                return;
+
+            EditorGUI.indentLevel++;
+            EditorGUILayout.PropertyField(_boxSize, new GUIContent("Box Size"));
+            EditorGUILayout.PropertyField(_boxColor, new GUIContent("Box Color"));
+            EditorGUI.indentLevel--;
+        }
+
+        private void DrawCapsuleSection()
+        {
+            EditorGUILayout.LabelField("Center Capsule", EditorStyles.boldLabel);
+            EditorGUILayout.PropertyField(_showCapsule, new GUIContent("Show Capsule"));
+            if (!_showCapsule.boolValue && !_showCapsule.hasMultipleDifferentValues)
+                return;
+
+            EditorGUI.indentLevel++;
+            EditorGUILayout.PropertyField(_capsuleRadius, new GUIContent("Capsule Radius"));
+            EditorGUILayout.PropertyField(_capsuleHeight, new GUIContent("Capsule Height"));
+            EditorGUILayout.PropertyField(_capsuleDirection, new GUIContent("Capsule Direction"));
+            EditorGUILayout.PropertyField(_capsuleColor, new GUIContent("Capsule Color"));
             EditorGUI.indentLevel--;
         }
 

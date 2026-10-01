@@ -3,7 +3,7 @@
 ## 概要
 
 チューニング用の **ギズモ表示** と、任意 Transform への **オフセット適用** を行うコンポーネントです。
-自身または親が選択されているとき、Scene ビューに中心球・矢印・ラベル・半透明メッシュを描画します。
+自身または親が選択されているとき、Scene ビューに中心球・ボックス・カプセル・矢印・ラベル・半透明メッシュを描画します。
 **Active** 時は `targetTransforms` に「自身の Transform + Offset」を継続適用します。
 **Preview Particles** 時は、TuningObject 自身の選択中のみ Target 配下の ParticleSystem をエディタ上でプレビュー再生します。
 
@@ -49,8 +49,12 @@
 | 項目 | 説明 |
 |------|------|
 | Show Sphere | 中心点の球を表示 |
-| Sphere Radius / Color | 球の大きさ・色 |
-| Arrows | 矢印の向き・長さ・ヘッドサイズ・色・ローカル/ワールド |
+| Sphere Radius / Color | 球の半径（ローカル単位）・色。スケールはオブジェクトに追従 |
+| Show Box | 中心のボックスを表示（回転・スケールは自身に追従） |
+| Box Size / Color | ボックスのサイズ（ローカル単位）・色 |
+| Show Capsule | 中心のカプセルを表示（回転・スケールは自身に追従） |
+| Capsule Radius / Height / Direction / Color | 半径・高さ（ローカル単位）・長軸（X/Y/Z）・色 |
+| Arrows | 矢印の向き・長さ・ヘッドサイズ・色・ローカル/ワールド。長さとヘッドはスケールに追従 |
 | Show Label | 中心右下にテキストを表示 |
 | Label Text / Color / Offset | 表示文言・色・画面上オフセット |
 | Show Mesh | 任意メッシュを半透明表示 |

@@ -1,9 +1,10 @@
 using UnityEngine;
-using UnityEngine.Animations;
 using Samirin33.NDMF.Base;
 
 #if UNITY_EDITOR
 using UnityEditor;
+using VRC.Dynamics;
+using VRC.SDK3.Dynamics.Constraint.Components;
 #endif
 
 namespace Samirin33.NDMF.Components
@@ -37,35 +38,35 @@ namespace Samirin33.NDMF.Components
 
             if (fixPosition && fixRotation)
             {
-                var constraint = target.GetComponent<ParentConstraint>();
-                if (constraint == null) constraint = target.AddComponent<ParentConstraint>();
+                var constraint = target.GetComponent<VRCParentConstraint>();
+                if (constraint == null) constraint = target.AddComponent<VRCParentConstraint>();
                 SetParentConstraintAxes(constraint);
-                AddSourceIfNeeded(constraint, sourceTransform);
+                FinishConstraint(constraint, sourceTransform);
             }
             else
             {
                 if (fixPosition)
                 {
-                    var constraint = target.GetComponent<PositionConstraint>();
-                    if (constraint == null) constraint = target.AddComponent<PositionConstraint>();
+                    var constraint = target.GetComponent<VRCPositionConstraint>();
+                    if (constraint == null) constraint = target.AddComponent<VRCPositionConstraint>();
                     SetPositionConstraintAxes(constraint);
-                    AddSourceIfNeeded(constraint, sourceTransform);
+                    FinishConstraint(constraint, sourceTransform);
                 }
                 if (fixRotation)
                 {
-                    var constraint = target.GetComponent<RotationConstraint>();
-                    if (constraint == null) constraint = target.AddComponent<RotationConstraint>();
+                    var constraint = target.GetComponent<VRCRotationConstraint>();
+                    if (constraint == null) constraint = target.AddComponent<VRCRotationConstraint>();
                     SetRotationConstraintAxes(constraint);
-                    AddSourceIfNeeded(constraint, sourceTransform);
+                    FinishConstraint(constraint, sourceTransform);
                 }
             }
 
             if (fixScale)
             {
-                var constraint = target.GetComponent<ScaleConstraint>();
-                if (constraint == null) constraint = target.AddComponent<ScaleConstraint>();
+                var constraint = target.GetComponent<VRCScaleConstraint>();
+                if (constraint == null) constraint = target.AddComponent<VRCScaleConstraint>();
                 SetScaleConstraintAxes(constraint);
-                AddSourceIfNeeded(constraint, sourceTransform);
+                FinishConstraint(constraint, sourceTransform);
             }
 
             DestroyImmediate(this);
@@ -87,39 +88,49 @@ namespace Samirin33.NDMF.Components
             if (sourceTransform == null) return;
 
             var t = transform;
+            var parent = t.parent;
 
-            if (fixPosition)
+            if (fixPosition && (positionX || positionY || positionZ))
             {
-                var pos = t.position;
-                if (positionX) pos.x = sourceTransform.position.x;
-                if (positionY) pos.y = sourceTransform.position.y;
-                if (positionZ) pos.z = sourceTransform.position.z;
-                t.position = pos;
+                var desired = parent != null
+                    ? parent.InverseTransformPoint(sourceTransform.position)
+                    : sourceTransform.position;
+                var pos = t.localPosition;
+                if (positionX) pos.x = desired.x;
+                if (positionY) pos.y = desired.y;
+                if (positionZ) pos.z = desired.z;
+                t.localPosition = pos;
             }
 
-            if (fixRotation)
+            if (fixRotation && (rotationX || rotationY || rotationZ))
             {
-                var rot = t.eulerAngles;
-                var sourceEuler = sourceTransform.eulerAngles;
-                if (rotationX) rot.x = sourceEuler.x;
-                if (rotationY) rot.y = sourceEuler.y;
-                if (rotationZ) rot.z = sourceEuler.z;
-                t.eulerAngles = rot;
+                var desiredRotation = parent != null
+                    ? Quaternion.Inverse(parent.rotation) * sourceTransform.rotation
+                    : sourceTransform.rotation;
+                if (rotationX && rotationY && rotationZ)
+                {
+                    t.localRotation = desiredRotation;
+                }
+                else
+                {
+                    var desired = desiredRotation.eulerAngles;
+                    var rot = t.localEulerAngles;
+                    if (rotationX) rot.x = desired.x;
+                    if (rotationY) rot.y = desired.y;
+                    if (rotationZ) rot.z = desired.z;
+                    t.localEulerAngles = rot;
+                }
             }
 
-            if (fixScale)
+            if (fixScale && (scaleX || scaleY || scaleZ))
             {
-                var current = t.lossyScale;
-                var desired = current;
                 var sourceScale = sourceTransform.lossyScale;
-                if (scaleX) desired.x = sourceScale.x;
-                if (scaleY) desired.y = sourceScale.y;
-                if (scaleZ) desired.z = sourceScale.z;
-                var parentScale = t.parent != null ? t.parent.lossyScale : Vector3.one;
-                t.localScale = new Vector3(
-                    Mathf.Approximately(parentScale.x, 0) ? desired.x : desired.x / parentScale.x,
-                    Mathf.Approximately(parentScale.y, 0) ? desired.y : desired.y / parentScale.y,
-                    Mathf.Approximately(parentScale.z, 0) ? desired.z : desired.z / parentScale.z);
+                var parentScale = parent != null ? parent.lossyScale : Vector3.one;
+                var scale = t.localScale;
+                if (scaleX) scale.x = Mathf.Approximately(parentScale.x, 0) ? sourceScale.x : sourceScale.x / parentScale.x;
+                if (scaleY) scale.y = Mathf.Approximately(parentScale.y, 0) ? sourceScale.y : sourceScale.y / parentScale.y;
+                if (scaleZ) scale.z = Mathf.Approximately(parentScale.z, 0) ? sourceScale.z : sourceScale.z / parentScale.z;
+                t.localScale = scale;
             }
         }
 
@@ -132,60 +143,57 @@ namespace Samirin33.NDMF.Components
             return prefab != null ? prefab.transform : null;
         }
 
-        private static void AddSourceIfNeeded<T>(T constraint, Transform sourceTransform) where T : Behaviour, IConstraint
+        private static void FinishConstraint(VRCConstraintBase constraint, Transform sourceTransform)
         {
-            if (constraint.sourceCount > 0) return;
-
-            var source = new ConstraintSource
+            if (constraint.Sources.Count == 0)
             {
-                sourceTransform = sourceTransform,
-                weight = 1f
-            };
-            constraint.AddSource(source);
+                var sources = constraint.Sources;
+                sources.Add(new VRCConstraintSource(sourceTransform, 1f));
+                constraint.Sources = sources;
+            }
+
+            constraint.GlobalWeight = 1f;
+            constraint.IsActive = true;
+            constraint.Locked = true;
         }
 
-        private void SetParentConstraintAxes(ParentConstraint constraint)
+        private void SetParentConstraintAxes(VRCParentConstraint constraint)
         {
-            constraint.constraintActive = true;
-            constraint.locked = true;
-            constraint.translationAxis = (Axis)(
-                (positionX ? (int)Axis.X : 0) |
-                (positionY ? (int)Axis.Y : 0) |
-                (positionZ ? (int)Axis.Z : 0));
-            constraint.rotationAxis = (Axis)(
-                (rotationX ? (int)Axis.X : 0) |
-                (rotationY ? (int)Axis.Y : 0) |
-                (rotationZ ? (int)Axis.Z : 0));
+            constraint.PositionAtRest = Vector3.zero;
+            constraint.RotationAtRest = Vector3.zero;
+            constraint.AffectsPositionX = positionX;
+            constraint.AffectsPositionY = positionY;
+            constraint.AffectsPositionZ = positionZ;
+            constraint.AffectsRotationX = rotationX;
+            constraint.AffectsRotationY = rotationY;
+            constraint.AffectsRotationZ = rotationZ;
         }
 
-        private void SetPositionConstraintAxes(PositionConstraint constraint)
+        private void SetPositionConstraintAxes(VRCPositionConstraint constraint)
         {
-            constraint.constraintActive = true;
-            constraint.locked = true;
-            constraint.translationAxis = (Axis)(
-                (positionX ? (int)Axis.X : 0) |
-                (positionY ? (int)Axis.Y : 0) |
-                (positionZ ? (int)Axis.Z : 0));
+            constraint.AffectsPositionX = positionX;
+            constraint.AffectsPositionY = positionY;
+            constraint.AffectsPositionZ = positionZ;
+            constraint.PositionAtRest = Vector3.zero;
+            constraint.PositionOffset = Vector3.zero;
         }
 
-        private void SetRotationConstraintAxes(RotationConstraint constraint)
+        private void SetRotationConstraintAxes(VRCRotationConstraint constraint)
         {
-            constraint.constraintActive = true;
-            constraint.locked = true;
-            constraint.rotationAxis = (Axis)(
-                (rotationX ? (int)Axis.X : 0) |
-                (rotationY ? (int)Axis.Y : 0) |
-                (rotationZ ? (int)Axis.Z : 0));
+            constraint.AffectsRotationX = rotationX;
+            constraint.AffectsRotationY = rotationY;
+            constraint.AffectsRotationZ = rotationZ;
+            constraint.RotationAtRest = Vector3.zero;
+            constraint.RotationOffset = Vector3.zero;
         }
 
-        private void SetScaleConstraintAxes(ScaleConstraint constraint)
+        private void SetScaleConstraintAxes(VRCScaleConstraint constraint)
         {
-            constraint.constraintActive = true;
-            constraint.locked = true;
-            constraint.scalingAxis = (Axis)(
-                (scaleX ? (int)Axis.X : 0) |
-                (scaleY ? (int)Axis.Y : 0) |
-                (scaleZ ? (int)Axis.Z : 0));
+            constraint.AffectsScaleX = scaleX;
+            constraint.AffectsScaleY = scaleY;
+            constraint.AffectsScaleZ = scaleZ;
+            constraint.ScaleAtRest = Vector3.one;
+            constraint.ScaleOffset = Vector3.one;
         }
 #endif
     }

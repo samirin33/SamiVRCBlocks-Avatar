@@ -55,6 +55,21 @@ namespace Samirin33.NDMF.Components.Editor
                         DefaultValue = 0f,
                     };
                 }
+
+                if (setting.fireValueChangedTrigger)
+                {
+                    yield return new ProvidedParameter(
+                        ResizableSyncParameters.GetValueChangedTriggerName(paramName),
+                        ParameterNamespace.Animator,
+                        _component,
+                        SamirinMABasePlugin.Instance,
+                        AnimatorControllerParameterType.Trigger)
+                    {
+                        WantSynced = false,
+                        IsAnimatorOnly = true,
+                        DefaultValue = 0f,
+                    };
+                }
             }
         }
 

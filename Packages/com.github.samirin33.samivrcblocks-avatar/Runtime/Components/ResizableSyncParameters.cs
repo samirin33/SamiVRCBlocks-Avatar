@@ -10,6 +10,7 @@ namespace Samirin33.NDMF.Components
         private void Reset()
         {
             priority = 50;
+            matchAvatarWriteDefaults = true;
         }
 
         [System.Serializable]
@@ -28,6 +29,12 @@ namespace Samirin33.NDMF.Components
 
             public DivisionType divisionType = DivisionType.Even;
             public float smoothWeight = 0.2f;
+
+            /// <summary>
+            /// true の場合、同期段が変化したフレームに (パラメーター名)_ValueChanged トリガーを有効化する。
+            /// 読み込み直後の初期値では発行しない。
+            /// </summary>
+            public bool fireValueChangedTrigger;
         }
 
         public enum ParamType
@@ -114,6 +121,16 @@ namespace Samirin33.NDMF.Components
         }
 
         /// <summary>
+        /// 同期段が変化したフレームに有効化するトリガー名。
+        /// </summary>
+        public static string GetValueChangedTriggerName(string paramName)
+        {
+            if (string.IsNullOrEmpty(paramName))
+                paramName = "Param";
+            return $"{paramName}_ValueChanged";
+        }
+
+        /// <summary>
         /// ビルド時に MA Parameters へ登録する同期用 Bool 名（1 bit = 1 Bool）。
         /// </summary>
         public static string GetSyncBoolParamName(string paramName, int bitIndex)
@@ -144,6 +161,11 @@ namespace Samirin33.NDMF.Components
         public SyncParamSetting[] syncParamSettings;
 
         public bool writeDefault = false;
+
+        /// <summary>
+        /// true の場合、生成する MA Merge Animator の Match Avatar Write Defaults を有効にする。
+        /// </summary>
+        public bool matchAvatarWriteDefaults = true;
 
         /// <summary> true の場合、ビルド時に親 Animator 内の Float パラメータ参照をすべて _Smoothed に置換する。 </summary>
         public bool replaceWithSmoothedInAnimator = true;

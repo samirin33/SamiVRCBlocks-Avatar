@@ -11,7 +11,7 @@ namespace Samirin33.NDMF.Components
 {
     /// <summary>
     /// チューニング用のギズモ表示コンポーネント。
-    /// 自身または親が選択されているとき、矢印・中心球・任意テキスト・半透明メッシュを Scene ビューに描画する。
+    /// 自身または親が選択されているとき、矢印・中心球・ボックス・カプセル・任意テキスト・半透明メッシュを Scene ビューに描画する。
     /// active 時は targetTransforms に自身+Offset を適用する。
     /// previewParticles 時は Target 配下の ParticleSystem をエディタ上でプレビュー再生する。
     /// ビルド時、子が無い場合は自身の GameObject を削除する。
@@ -30,17 +30,25 @@ namespace Samirin33.NDMF.Components
             public Vector3 offsetScale = Vector3.one;
         }
 
+        /// <summary>カプセルの長軸。回転は自身の Transform に追従する。</summary>
+        public enum CapsuleDirection
+        {
+            X,
+            Y,
+            Z,
+        }
+
         [Serializable]
         public class ArrowGizmo
         {
             [Tooltip("矢印の向き（ゼロベクトルの場合は描画しない）")]
             public Vector3 direction = Vector3.forward;
 
-            [Tooltip("矢印の長さ")]
+            [Tooltip("矢印の長さ。オブジェクトのスケールが反映される")]
             [Min(0f)]
             public float length = 0.1f;
 
-            [Tooltip("矢印先端（ヘッド）の大きさ")]
+            [Tooltip("矢印先端（ヘッド）の大きさ。オブジェクトのスケールが反映される")]
             [Min(0f)]
             public float headSize = 0.02f;
 
@@ -58,7 +66,7 @@ namespace Samirin33.NDMF.Components
         public bool previewParticles;
 
         [Header("Target Transforms")]
-        public TargetTransform[] targetTransforms;
+        public TargetTransform[] targetTransforms = { new TargetTransform() };
 
         /// <summary>スナップ直後のローカル姿勢が記録されているか。</summary>
         public bool HasSnapLocalPose => _hasSnapLocalPose;
@@ -78,12 +86,38 @@ namespace Samirin33.NDMF.Components
         [Tooltip("中心点の球を表示する")]
         public bool showSphere = true;
 
-        [Tooltip("中心球の半径")]
+        [Tooltip("中心球の半径（ローカル単位。オブジェクトのスケールが反映される）")]
         [Min(0f)]
         public float sphereRadius = 0.015f;
 
         [Tooltip("中心球の色")]
         public Color sphereColor = new Color(1f, 0.85f, 0.2f, 0.9f);
+
+        [Tooltip("中心のボックスを表示する。サイズはローカル単位で、回転とスケールは自身の Transform に追従する")]
+        public bool showBox;
+
+        [Tooltip("ボックスのサイズ（ローカル単位。オブジェクトのスケールが反映される）")]
+        public Vector3 boxSize = new Vector3(0.03f, 0.03f, 0.03f);
+
+        [Tooltip("ボックスの色")]
+        public Color boxColor = new Color(0.3f, 0.85f, 0.45f, 0.9f);
+
+        [Tooltip("中心のカプセルを表示する。サイズはローカル単位で、回転とスケールは自身の Transform に追従する")]
+        public bool showCapsule;
+
+        [Tooltip("カプセルの半径（ローカル単位。オブジェクトのスケールが反映される）")]
+        [Min(0f)]
+        public float capsuleRadius = 0.015f;
+
+        [Tooltip("カプセルの高さ（端から端まで、ローカル単位）。半径の2倍未満のときは球と同じ見た目になる")]
+        [Min(0f)]
+        public float capsuleHeight = 0.06f;
+
+        [Tooltip("カプセルの長軸")]
+        public CapsuleDirection capsuleDirection = CapsuleDirection.Y;
+
+        [Tooltip("カプセルの色")]
+        public Color capsuleColor = new Color(0.65f, 0.45f, 1f, 0.9f);
 
         [Tooltip("描画する矢印の一覧（数・向き・長さ・色は自由）")]
         public List<ArrowGizmo> arrows = new List<ArrowGizmo>
@@ -313,6 +347,7 @@ namespace Samirin33.NDMF.Components
 
 #if UNITY_EDITOR
         private static Material s_translucentMaterial;
+        private static Mesh s_cylinderMesh;
 
         private const double PlacementAlignDelaySeconds = 0.3;
         private const double PlacementAlignGiveUpSeconds = 5.0;
@@ -347,6 +382,9 @@ namespace Samirin33.NDMF.Components
 
         private void Reset()
         {
+            if (targetTransforms == null || targetTransforms.Length == 0)
+                targetTransforms = new[] { new TargetTransform() };
+
             SchedulePlacementSnap();
         }
 
@@ -614,11 +652,13 @@ namespace Samirin33.NDMF.Components
                 DrawTranslucentMesh();
 
             if (showSphere && sphereRadius > 0f)
-            {
-                Gizmos.color = sphereColor;
-                Gizmos.DrawSphere(origin, sphereRadius);
-                Gizmos.DrawWireSphere(origin, sphereRadius);
-            }
+                DrawSphere();
+
+            if (showBox && boxSize.sqrMagnitude > 1e-10f)
+                DrawBox();
+
+            if (showCapsule && capsuleRadius > 0f)
+                DrawCapsule();
 
             if (arrows != null)
             {
@@ -634,16 +674,194 @@ namespace Samirin33.NDMF.Components
                 DrawLabel(origin);
         }
 
+        private void DrawSphere()
+        {
+            var prevMatrix = Gizmos.matrix;
+            Gizmos.matrix = transform.localToWorldMatrix;
+            Gizmos.color = sphereColor;
+            Gizmos.DrawSphere(Vector3.zero, sphereRadius);
+            DrawWireCircle(Vector3.zero, Vector3.right, Vector3.up, sphereRadius);
+            DrawWireCircle(Vector3.zero, Vector3.right, Vector3.forward, sphereRadius);
+            DrawWireCircle(Vector3.zero, Vector3.up, Vector3.forward, sphereRadius);
+            Gizmos.matrix = prevMatrix;
+        }
+
+        private void DrawBox()
+        {
+            var prevMatrix = Gizmos.matrix;
+            Gizmos.matrix = transform.localToWorldMatrix;
+            Gizmos.color = boxColor;
+            Gizmos.DrawCube(Vector3.zero, boxSize);
+            Gizmos.DrawWireCube(Vector3.zero, boxSize);
+            Gizmos.matrix = prevMatrix;
+        }
+
+        private void DrawCapsule()
+        {
+            var radius = capsuleRadius;
+            var height = Mathf.Max(capsuleHeight, radius * 2f);
+            var straight = height - radius * 2f;
+            GetCapsuleAxes(out var axis, out var right, out var forward);
+            var top = axis * (straight * 0.5f);
+            var bottom = -top;
+
+            var prevMatrix = Gizmos.matrix;
+            Gizmos.matrix = transform.localToWorldMatrix;
+            Gizmos.color = capsuleColor;
+            Gizmos.DrawSphere(top, radius);
+            Gizmos.DrawSphere(bottom, radius);
+
+            if (straight > 1e-5f)
+            {
+                var mesh = GetCylinderMesh();
+                if (mesh != null)
+                {
+                    // 円柱メッシュは半径 0.5・高さ 2。スケールは localToWorldMatrix が掛ける
+                    var align = Quaternion.FromToRotation(Vector3.up, axis);
+                    Gizmos.DrawMesh(mesh, Vector3.zero, align, new Vector3(radius * 2f, straight * 0.5f, radius * 2f));
+                }
+            }
+
+            DrawWireCapsule(top, bottom, axis, right, forward, radius);
+            Gizmos.matrix = prevMatrix;
+        }
+
+        private void GetCapsuleAxes(out Vector3 axis, out Vector3 right, out Vector3 forward)
+        {
+            switch (capsuleDirection)
+            {
+                case CapsuleDirection.X:
+                    axis = Vector3.right;
+                    right = Vector3.up;
+                    forward = Vector3.forward;
+                    break;
+                case CapsuleDirection.Z:
+                    axis = Vector3.forward;
+                    right = Vector3.right;
+                    forward = Vector3.up;
+                    break;
+                default:
+                    axis = Vector3.up;
+                    right = Vector3.right;
+                    forward = Vector3.forward;
+                    break;
+            }
+        }
+
+        private static void DrawWireCapsule(Vector3 top, Vector3 bottom, Vector3 axis, Vector3 right, Vector3 forward, float radius)
+        {
+            Gizmos.DrawLine(top + right * radius, bottom + right * radius);
+            Gizmos.DrawLine(top - right * radius, bottom - right * radius);
+            Gizmos.DrawLine(top + forward * radius, bottom + forward * radius);
+            Gizmos.DrawLine(top - forward * radius, bottom - forward * radius);
+
+            DrawWireCircle(top, right, forward, radius);
+            DrawWireCircle(bottom, right, forward, radius);
+            DrawWireSemicircle(top, right, axis, radius);
+            DrawWireSemicircle(top, forward, axis, radius);
+            DrawWireSemicircle(bottom, right, -axis, radius);
+            DrawWireSemicircle(bottom, forward, -axis, radius);
+        }
+
+        private static void DrawWireCircle(Vector3 center, Vector3 right, Vector3 forward, float radius)
+        {
+            const int segments = 24;
+            var prev = center + right * radius;
+            for (int i = 1; i <= segments; i++)
+            {
+                var angle = i / (float)segments * Mathf.PI * 2f;
+                var p = center + (right * Mathf.Cos(angle) + forward * Mathf.Sin(angle)) * radius;
+                Gizmos.DrawLine(prev, p);
+                prev = p;
+            }
+        }
+
+        private static void DrawWireSemicircle(Vector3 center, Vector3 from, Vector3 toward, float radius)
+        {
+            const int segments = 12;
+            var prev = center + from * radius;
+            for (int i = 1; i <= segments; i++)
+            {
+                var angle = i / (float)segments * Mathf.PI;
+                var p = center + (from * Mathf.Cos(angle) + toward * Mathf.Sin(angle)) * radius;
+                Gizmos.DrawLine(prev, p);
+                prev = p;
+            }
+        }
+
+        /// <summary>半径 0.5・高さ 2 の円柱。両面ポリゴンなのでギズモのカリングに依存しない。</summary>
+        private static Mesh GetCylinderMesh()
+        {
+            if (s_cylinderMesh != null) return s_cylinderMesh;
+
+            const int segments = 16;
+            const float radius = 0.5f;
+            const float halfHeight = 1f;
+
+            var vertices = new Vector3[(segments + 1) * 2];
+            for (int i = 0; i <= segments; i++)
+            {
+                var angle = i / (float)segments * Mathf.PI * 2f;
+                var x = Mathf.Cos(angle) * radius;
+                var z = Mathf.Sin(angle) * radius;
+                vertices[i] = new Vector3(x, halfHeight, z);
+                vertices[i + segments + 1] = new Vector3(x, -halfHeight, z);
+            }
+
+            var triangles = new int[segments * 12];
+            var t = 0;
+            for (int i = 0; i < segments; i++)
+            {
+                int top = i;
+                int nextTop = i + 1;
+                int bottom = i + segments + 1;
+                int nextBottom = nextTop + segments + 1;
+
+                triangles[t++] = top;
+                triangles[t++] = nextTop;
+                triangles[t++] = bottom;
+                triangles[t++] = nextTop;
+                triangles[t++] = nextBottom;
+                triangles[t++] = bottom;
+
+                triangles[t++] = top;
+                triangles[t++] = bottom;
+                triangles[t++] = nextTop;
+                triangles[t++] = nextTop;
+                triangles[t++] = bottom;
+                triangles[t++] = nextBottom;
+            }
+
+            s_cylinderMesh = new Mesh
+            {
+                name = "TuningObject Cylinder",
+                hideFlags = HideFlags.HideAndDontSave,
+            };
+            s_cylinderMesh.SetVertices(vertices);
+            s_cylinderMesh.SetTriangles(triangles, 0);
+            s_cylinderMesh.RecalculateNormals();
+            return s_cylinderMesh;
+        }
+
         private void DrawArrow(Vector3 origin, ArrowGizmo arrow)
         {
             var dir = arrow.direction;
             if (dir.sqrMagnitude < 1e-10f || arrow.length <= 0f) return;
 
-            if (arrow.localSpace)
-                dir = transform.TransformDirection(dir);
-
             dir.Normalize();
-            var tip = origin + dir * arrow.length;
+            var prevMatrix = Gizmos.matrix;
+            if (arrow.localSpace)
+            {
+                Gizmos.matrix = transform.localToWorldMatrix;
+            }
+            else
+            {
+                var scale = MaxAbsComponent(transform.lossyScale);
+                Gizmos.matrix = Matrix4x4.TRS(origin, Quaternion.identity, Vector3.one * scale);
+            }
+
+            origin = Vector3.zero;
+            var tip = dir * arrow.length;
 
             Gizmos.color = arrow.color;
             Gizmos.DrawLine(origin, tip);
@@ -664,6 +882,12 @@ namespace Samirin33.NDMF.Components
             Gizmos.DrawLine(tip, headBase - up * half);
             Gizmos.DrawLine(headBase + side * half, headBase - side * half);
             Gizmos.DrawLine(headBase + up * half, headBase - up * half);
+            Gizmos.matrix = prevMatrix;
+        }
+
+        private static float MaxAbsComponent(Vector3 scale)
+        {
+            return Mathf.Max(Mathf.Abs(scale.x), Mathf.Abs(scale.y), Mathf.Abs(scale.z));
         }
 
         private void DrawLabel(Vector3 origin)

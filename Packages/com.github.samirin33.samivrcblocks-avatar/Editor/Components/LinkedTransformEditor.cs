@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
 using Samirin33.NDMF.Base.Editor;
@@ -75,10 +77,10 @@ namespace Samirin33.NDMF.Components.Editor
                 serializedObject.Update();
 
                 EditorGUILayout.HelpBox(
-                    "複数ソースを重み付きでブレンドし、オフセット・倍率・座標空間を指定してターゲットへコピーできます。",
+                    "複数ソースを重み付きでブレンドし、オフセット・倍率・座標空間を指定してターゲットへコピーできます。ソースは Transform または Humanoid ボーンを指定できます。",
                     MessageType.Info);
 
-                EditorGUILayout.PropertyField(_target, new GUIContent("Target", "未指定の場合は自身に適用します"));
+                EditorGUILayout.PropertyField(_target, new GUIContent("Target", "コンポーネント追加時は自身。未指定の場合も自身に適用します"));
                 EditorGUILayout.Space(5);
 
                 EditorGUILayout.LabelField("Sources");
@@ -185,6 +187,87 @@ namespace Samirin33.NDMF.Components.Editor
             }
             EditorGUILayout.EndVertical();
             EditorGUILayout.Space(5);
+        }
+    }
+
+    [CustomPropertyDrawer(typeof(LinkedTransform.Source))]
+    public class LinkedTransformSourceDrawer : PropertyDrawer
+    {
+        private static GUIContent[] _boneLabels;
+        private static int[] _boneValues;
+
+        public override void OnGUI(Rect position, SerializedProperty property, GUIContent label)
+        {
+            EditorGUI.BeginProperty(position, label, property);
+
+            var kindProp = property.FindPropertyRelative("kind");
+            var transformProp = property.FindPropertyRelative("transform");
+            var boneProp = property.FindPropertyRelative("humanoidBone");
+            var weightProp = property.FindPropertyRelative("weight");
+
+            var line = EditorGUIUtility.singleLineHeight;
+            var gap = EditorGUIUtility.standardVerticalSpacing;
+            var row = new Rect(position.x, position.y, position.width, line);
+
+            EditorGUI.PropertyField(row, kindProp, label);
+
+            row.y += line + gap;
+            if (!kindProp.hasMultipleDifferentValues
+                && kindProp.enumValueIndex == (int)LinkedTransform.SourceKind.HumanoidBone)
+                DrawBonePopup(row, boneProp);
+            else if (kindProp.hasMultipleDifferentValues)
+                EditorGUI.LabelField(row, "指定", "—");
+            else
+                EditorGUI.PropertyField(row, transformProp, new GUIContent("Transform"));
+
+            row.y += line + gap;
+            EditorGUI.PropertyField(row, weightProp, new GUIContent("Weight"));
+
+            EditorGUI.EndProperty();
+        }
+
+        public override float GetPropertyHeight(SerializedProperty property, GUIContent label)
+        {
+            var line = EditorGUIUtility.singleLineHeight;
+            var gap = EditorGUIUtility.standardVerticalSpacing;
+            return line * 3 + gap * 2;
+        }
+
+        private static void DrawBonePopup(Rect row, SerializedProperty boneProp)
+        {
+            EnsureBoneOptions();
+
+            EditorGUI.showMixedValue = boneProp.hasMultipleDifferentValues;
+            EditorGUI.BeginChangeCheck();
+            var next = EditorGUI.IntPopup(
+                row,
+                new GUIContent("Humanoid"),
+                boneProp.intValue,
+                _boneLabels,
+                _boneValues);
+            if (EditorGUI.EndChangeCheck())
+                boneProp.intValue = next;
+            EditorGUI.showMixedValue = false;
+        }
+
+        private static void EnsureBoneOptions()
+        {
+            if (_boneLabels != null)
+                return;
+
+            var labels = new List<GUIContent> { new GUIContent("Root") };
+            var values = new List<int> { LinkedTransform.Source.HumanoidRoot };
+            foreach (HumanBodyBones bone in Enum.GetValues(typeof(HumanBodyBones)))
+            {
+                if (!LinkedTransform.Source.IsHumanoidBone(bone))
+                    continue;
+
+                labels.Add(new GUIContent(ObjectNames.NicifyVariableName(bone.ToString())));
+                values.Add((int)bone);
+            }
+
+            _boneLabels = labels.ToArray();
+            _boneValues = values.ToArray();
         }
     }
 }

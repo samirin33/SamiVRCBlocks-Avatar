@@ -1,12 +1,16 @@
 using System;
 using UnityEngine;
 using Samirin33.NDMF.Base;
+using nadena.dev.ndmf.runtime;
 
 namespace Samirin33.NDMF.Components
 {
     /// <summary>
-    /// 任意の複数 Transform を重み付きでブレンドし、オフセット・倍率・座標空間を指定してターゲットへコピーする。
-    /// ターゲット未指定時は自身。エディタ上でプレビュー適用でき、ビルド時に一度ベイクして自身を削除する。
+    /// 任意の複数 Transform、または Humanoid ボーンを重み付きでブレンドし、
+    /// オフセット・倍率・座標空間を指定してターゲットへコピーする。
+    /// コンポーネント追加時のターゲットは自身。未指定時も自身に適用する。
+    /// エディタ上でプレビュー適用できる。ビルドではボーン移動前にソース姿勢を記録し、
+    /// ControllableHumanoid と Modular Avatar の後にターゲットへベイクして自身を削除する。
     /// </summary>
     [ExecuteAlways]
     [DisallowMultipleComponent]
@@ -19,18 +23,68 @@ namespace Samirin33.NDMF.Components
             Local,
         }
 
+        public enum SourceKind
+        {
+            [InspectorName("Transform")]
+            Transform,
+            [InspectorName("Humanoid ボーン")]
+            HumanoidBone,
+        }
+
         [Serializable]
         public class Source
         {
+            [Tooltip("Transform を直接指定するか、Humanoid ボーンを指定するか")]
+            public SourceKind kind = SourceKind.Transform;
+
             public Transform transform;
+
+            [Tooltip("アバターの Humanoid ボーン。Root は Armature（Hips の親）")]
+            public HumanBodyBones humanoidBone = HumanBodyBones.Hips;
+
             [Min(0f)]
             public float weight = 1f;
+
+            /// <summary>Humanoid 指定の Root。Armature（Hips の親）を指す。</summary>
+            public const int HumanoidRoot = -1;
+
+            public static bool IsHumanoidBone(HumanBodyBones bone) =>
+                bone >= 0 && bone < HumanBodyBones.LastBone;
+
+            public static bool IsHumanoidRoot(HumanBodyBones bone) =>
+                (int)bone == HumanoidRoot;
+
+            public Transform Resolve(Animator animator)
+            {
+                if (kind != SourceKind.HumanoidBone)
+                    return transform;
+
+                if (animator == null || !animator.isHuman)
+                    return null;
+
+                if (IsHumanoidRoot(humanoidBone))
+                    return ResolveArmatureRoot(animator);
+
+                if (!IsHumanoidBone(humanoidBone))
+                    return null;
+
+                return animator.GetBoneTransform(humanoidBone);
+            }
+
+            public static Transform ResolveArmatureRoot(Animator animator)
+            {
+                if (animator == null)
+                    return null;
+
+                var hips = animator.GetBoneTransform(HumanBodyBones.Hips);
+                return hips != null ? hips.parent : null;
+            }
         }
 
-        [Tooltip("適用先 Transform（未指定なら自身）")]
+        [Tooltip("適用先 Transform。コンポーネント追加時は自身。未指定なら自身")]
         public Transform target;
 
-        [Tooltip("コピー元の Transform と重み（Constraint と同様）")]
+        [Tooltip("コピー元。Transform または Humanoid ボーンと重み")]
         public Source[] sources = Array.Empty<Source>();
 
         [Header("Position")]
@@ -65,12 +119,43 @@ namespace Samirin33.NDMF.Components
 
         public Transform ResolvedTarget => target != null ? target : transform;
 
+        private struct SourceCapture
+        {
+            public bool valid;
+            public Vector3 worldPosition;
+            public Quaternion worldRotation;
+            public Vector3 worldScale;
+            public Vector3 localPosition;
+            public Quaternion localRotation;
+            public Vector3 localScale;
+        }
+
+        [NonSerialized]
+        private SourceCapture[] _capturedSources;
+
+        public LinkedTransform()
+        {
+            // ControllableHumanoid（Generating, 50）と MA Bone Proxy の後にベイクする。
+            priority = 200;
+        }
+
+        private void Reset()
+        {
+            target = transform;
+        }
+
         public override void OnBuild(SamirinBuildPhase buildPhase, bool beforeModularAvatar, GameObject avatarRootObject)
         {
-            if (buildPhase != SamirinBuildPhase.Resolving || !beforeModularAvatar)
+            if (buildPhase == SamirinBuildPhase.Resolving && beforeModularAvatar)
+            {
+                CaptureSources(avatarRootObject);
+                return;
+            }
+
+            if (buildPhase != SamirinBuildPhase.Transforming || beforeModularAvatar)
                 return;
 
-            ApplyLink();
+            ApplyLink(avatarRootObject);
             DestroyImmediate(this);
         }
 
@@ -80,7 +165,7 @@ namespace Samirin33.NDMF.Components
             if (Application.isPlaying)
                 return;
 
-            ApplyLink();
+            ApplyLink(null);
         }
 #endif
 
@@ -89,34 +174,106 @@ namespace Samirin33.NDMF.Components
         /// </summary>
         public void ApplyLink()
         {
-            var t = ResolvedTarget;
-            if (t == null || sources == null || sources.Length == 0)
-                return;
-
-            if (linkPosition)
-                ApplyPosition(t);
-
-            if (linkRotation)
-                ApplyRotation(t);
-
-            if (linkScale)
-                ApplyScale(t);
+            ApplyLink(null);
         }
 
-        private void ApplyPosition(Transform t)
+        private void CaptureSources(GameObject avatarRootObject)
         {
-            if (!TryBlendVector3(positionSpace, GetPosition, out var blended))
+            if (sources == null || sources.Length == 0)
+            {
+                _capturedSources = null;
+                return;
+            }
+
+            var animator = FindHumanoidAnimator();
+            _capturedSources = new SourceCapture[sources.Length];
+            for (var i = 0; i < sources.Length; i++)
+            {
+                var entry = sources[i];
+                if (entry == null)
+                    continue;
+
+                var source = entry.Resolve(animator);
+                if (source == null)
+                    continue;
+
+                _capturedSources[i] = new SourceCapture
+                {
+                    valid = true,
+                    worldPosition = TransformMath.GetWorldPosition(source),
+                    worldRotation = TransformMath.GetWorldRotation(source),
+                    worldScale = TransformMath.GetWorldScale(source),
+                    localPosition = source.localPosition,
+                    localRotation = source.localRotation,
+                    localScale = source.localScale,
+                };
+            }
+        }
+
+        private void ApplyLink(GameObject avatarRootObject)
+        {
+            if (sources == null || sources.Length == 0)
+                return;
+
+            var animator = FindHumanoidAnimator();
+            ApplyTo(ResolvedTarget, animator);
+
+            // HipPos のように適用先が別オブジェクトでも、コンポーネント自身（ギミック階層）も合わせる。
+            if (target != null && target != transform)
+                ApplyTo(transform, animator);
+        }
+
+        private void ApplyTo(Transform t, Animator animator)
+        {
+            if (t == null)
+                return;
+
+            // 位置は最後に書く。回転やスケールの反映でワールド位置がずれても、ソースの位置を残す。
+            if (linkScale)
+                ApplyScale(t, animator);
+
+            if (linkRotation)
+                ApplyRotation(t, animator);
+
+            if (linkPosition)
+                ApplyPosition(t, animator);
+        }
+
+        private bool TryGetSource(int index, Animator animator, out Transform live, out SourceCapture capture)
+        {
+            live = null;
+            capture = default;
+            if (index < 0 || sources == null || index >= sources.Length)
+                return false;
+
+            var entry = sources[index];
+            if (entry == null || entry.weight <= 0f)
+                return false;
+
+            if (_capturedSources != null && index < _capturedSources.Length && _capturedSources[index].valid)
+            {
+                capture = _capturedSources[index];
+                return true;
+            }
+
+            live = entry.Resolve(animator);
+            return live != null;
+        }
+
+        private void ApplyPosition(Transform t, Animator animator)
+        {
+            if (!TryBlendVector3(animator, positionSpace, isScale: false, out var blended))
                 return;
 
             var desired = Vector3.Scale(blended, positionMultiplier) + positionOffset;
 
             if (positionSpace == TransformSpace.World)
             {
-                var pos = t.position;
+                var pos = TransformMath.GetWorldPosition(t);
                 if (positionX) pos.x = desired.x;
                 if (positionY) pos.y = desired.y;
                 if (positionZ) pos.z = desired.z;
-                t.position = pos;
+                TransformMath.SetWorldPosition(t, pos);
             }
             else
             {
@@ -128,20 +285,20 @@ namespace Samirin33.NDMF.Components
             }
         }
 
-        private void ApplyRotation(Transform t)
+        private void ApplyRotation(Transform t, Animator animator)
         {
-            if (!TryBlendRotation(rotationSpace, out var blended))
+            if (!TryBlendRotation(animator, rotationSpace, out var blended))
                 return;
 
             var desired = Vector3.Scale(blended.eulerAngles, rotationMultiplier) + rotationOffset;
 
             if (rotationSpace == TransformSpace.World)
             {
-                var rot = t.eulerAngles;
+                var rot = TransformMath.GetWorldRotation(t).eulerAngles;
                 if (rotationX) rot.x = desired.x;
                 if (rotationY) rot.y = desired.y;
                 if (rotationZ) rot.z = desired.z;
-                t.eulerAngles = rot;
+                TransformMath.SetWorldRotation(t, Quaternion.Euler(rot));
             }
             else
             {
@@ -153,20 +310,20 @@ namespace Samirin33.NDMF.Components
             }
         }
 
-        private void ApplyScale(Transform t)
+        private void ApplyScale(Transform t, Animator animator)
         {
-            if (!TryBlendVector3(scaleSpace, GetScale, out var blended))
+            if (!TryBlendVector3(animator, scaleSpace, isScale: true, out var blended))
                 return;
 
             var desired = Vector3.Scale(blended, scaleMultiplier) + scaleOffset;
 
             if (scaleSpace == TransformSpace.World)
             {
-                var current = t.lossyScale;
+                var current = TransformMath.GetWorldScale(t);
                 if (scaleX) current.x = desired.x;
                 if (scaleY) current.y = desired.y;
                 if (scaleZ) current.z = desired.z;
-                SetLossyScale(t, current);
+                TransformMath.SetWorldScale(t, current);
             }
             else
             {
@@ -178,19 +335,31 @@ namespace Samirin33.NDMF.Components
             }
         }
 
-        private bool TryBlendVector3(TransformSpace space, Func<Transform, TransformSpace, Vector3> getter, out Vector3 blended)
+        private bool TryBlendVector3(Animator animator, TransformSpace space, bool isScale, out Vector3 blended)
         {
             blended = Vector3.zero;
             var totalWeight = 0f;
 
             for (var i = 0; i < sources.Length; i++)
             {
-                var entry = sources[i];
-                if (entry == null || entry.transform == null || entry.weight <= 0f)
+                if (!TryGetSource(i, animator, out var live, out var capture))
                     continue;
 
-                blended += getter(entry.transform, space) * entry.weight;
-                totalWeight += entry.weight;
+                Vector3 value;
+                if (capture.valid)
+                {
+                    if (space == TransformSpace.World)
+                        value = isScale ? capture.worldScale : capture.worldPosition;
+                    else
+                        value = isScale ? capture.localScale : capture.localPosition;
+                }
+                else if (isScale)
+                    value = space == TransformSpace.World ? TransformMath.GetWorldScale(live) : live.localScale;
+                else
+                    value = space == TransformSpace.World ? TransformMath.GetWorldPosition(live) : live.localPosition;
+
+                blended += value * sources[i].weight;
+                totalWeight += sources[i].weight;
             }
 
             if (totalWeight <= 1e-8f)
@@ -200,7 +369,7 @@ namespace Samirin33.NDMF.Components
             return true;
         }
 
-        private bool TryBlendRotation(TransformSpace space, out Quaternion blended)
+        private bool TryBlendRotation(Animator animator, TransformSpace space, out Quaternion blended)
         {
             blended = Quaternion.identity;
             var accum = Vector4.zero;
@@ -210,11 +379,15 @@ namespace Samirin33.NDMF.Components
 
             for (var i = 0; i < sources.Length; i++)
             {
-                var entry = sources[i];
-                if (entry == null || entry.transform == null || entry.weight <= 0f)
+                if (!TryGetSource(i, animator, out var live, out var capture))
                     continue;
 
-                var q = GetRotation(entry.transform, space);
+                Quaternion q;
+                if (capture.valid)
+                    q = space == TransformSpace.World ? capture.worldRotation : capture.localRotation;
+                else
+                    q = space == TransformSpace.World ? TransformMath.GetWorldRotation(live) : live.localRotation;
+
                 if (!hasReference)
                 {
                     reference = q;
@@ -225,8 +398,8 @@ namespace Samirin33.NDMF.Components
                     q = new Quaternion(-q.x, -q.y, -q.z, -q.w);
                 }
 
-                accum += new Vector4(q.x, q.y, q.z, q.w) * entry.weight;
-                totalWeight += entry.weight;
+                accum += new Vector4(q.x, q.y, q.z, q.w) * sources[i].weight;
+                totalWeight += sources[i].weight;
             }
 
             if (totalWeight <= 1e-8f)
@@ -241,40 +414,16 @@ namespace Samirin33.NDMF.Components
             return true;
         }
 
-        private static Vector3 GetPosition(Transform source, TransformSpace space)
+        private Animator FindHumanoidAnimator()
         {
-            return space == TransformSpace.World ? source.position : source.localPosition;
-        }
+            var avatarRoot = RuntimeUtil.FindAvatarInParents(transform);
+            if (avatarRoot == null)
+                return null;
 
-        private static Quaternion GetRotation(Transform source, TransformSpace space)
-        {
-            return space == TransformSpace.World ? source.rotation : source.localRotation;
-        }
+            if (avatarRoot.TryGetComponent(out Animator avatarAnimator) && avatarAnimator.isHuman)
+                return avatarAnimator;
 
-        private static Vector3 GetScale(Transform source, TransformSpace space)
-        {
-            return space == TransformSpace.World ? source.lossyScale : source.localScale;
-        }
-
-        private static void SetLossyScale(Transform target, Vector3 lossyScale)
-        {
-            var parent = target.parent;
-            if (parent == null)
-            {
-                target.localScale = lossyScale;
-                return;
-            }
-
-            var parentLossy = parent.lossyScale;
-            target.localScale = new Vector3(
-                ApproxDiv(lossyScale.x, parentLossy.x),
-                ApproxDiv(lossyScale.y, parentLossy.y),
-                ApproxDiv(lossyScale.z, parentLossy.z));
-        }
-
-        private static float ApproxDiv(float a, float b)
-        {
-            return Mathf.Abs(b) > 1e-8f ? a / b : a;
+            return null;
         }
     }
 }

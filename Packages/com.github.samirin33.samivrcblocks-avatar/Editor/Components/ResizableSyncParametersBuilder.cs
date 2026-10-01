@@ -164,7 +164,7 @@ namespace Samirin33.NDMF.Components.Editor
             if (resizableSyncParameters == null || resizableSyncParameters.Length == 0)
                 return Array.Empty<AnimatorController>();
 
-            var (mergedSettings, writeDefault) = MergeSettingsFromModule(resizableSyncParameters);
+            var (mergedSettings, writeDefault, matchAvatarWriteDefaults) = MergeSettingsFromModule(resizableSyncParameters);
             if (mergedSettings.Count == 0)
                 return Array.Empty<AnimatorController>();
 
@@ -175,13 +175,13 @@ namespace Samirin33.NDMF.Components.Editor
             var result = new List<AnimatorController> { controller };
 
             var moduleParent = resizableSyncParameters.FirstOrDefault(c => c != null)?.gameObject ?? avatarRootObject;
-            AddModularAvatarModule(moduleParent, controller, paramNamesToRegister);
+            AddModularAvatarModule(moduleParent, controller, paramNamesToRegister, matchAvatarWriteDefaults);
 
             var smoothingInfos = ExtractFloatSmoothingInfos(resizableSyncParameters);
             if (smoothingInfos.Count > 0)
             {
                 var smoothingController = ParameterSmoothingBuilder.BuildFromResizableSyncParameters(
-                    avatarRootObject, smoothingInfos.ToArray(), moduleParent);
+                    avatarRootObject, smoothingInfos.ToArray(), moduleParent, matchAvatarWriteDefaults);
                 if (smoothingController != null)
                     result.Add(smoothingController);
 
@@ -273,15 +273,21 @@ namespace Samirin33.NDMF.Components.Editor
             }
         }
 
-        private static (List<ResizableSyncParameters.SyncParamSetting> settings, bool writeDefault) MergeSettingsFromModule(
+        private static (List<ResizableSyncParameters.SyncParamSetting> settings, bool writeDefault, bool matchAvatarWriteDefaults) MergeSettingsFromModule(
             ResizableSyncParameters[] resizableSyncParameters)
         {
             var processedParamNames = new HashSet<string>(StringComparer.Ordinal);
             var mergedSettings = new List<ResizableSyncParameters.SyncParamSetting>();
             var writeDefault = resizableSyncParameters.Length > 0 && resizableSyncParameters[0].writeDefault;
+            var matchAvatarWriteDefaults = false;
 
             foreach (var component in resizableSyncParameters)
             {
+                if (component == null) continue;
+                if (component.writeDefault)
+                    writeDefault = true;
+                if (component.matchAvatarWriteDefaults)
+                    matchAvatarWriteDefaults = true;
                 if (component.syncParamSettings == null) continue;
 
                 foreach (var setting in component.syncParamSettings)
@@ -296,12 +302,9 @@ namespace Samirin33.NDMF.Components.Editor
                     processedParamNames.Add(paramName);
                     mergedSettings.Add(setting);
                 }
-
-                if (component.writeDefault)
-                    writeDefault = true;
             }
 
-            return (mergedSettings, writeDefault);
+            return (mergedSettings, writeDefault, matchAvatarWriteDefaults);
         }
 
         private static AnimatorController CreateControllerFromScratch(ResizableSyncParameters.SyncParamSetting[] settings,
@@ -330,7 +333,7 @@ namespace Samirin33.NDMF.Components.Editor
 
             controller.AddParameter("IsLocal", AnimatorControllerParameterType.Bool);
 
-            var layersToAdd = new List<(AnimatorControllerLayer layer, string paramName, string intParamName, int bitCount, int maxValue, bool isFloat)>();
+            var layersToAdd = new List<(AnimatorControllerLayer layer, string paramName, string intParamName, int bitCount, int maxValue, bool isFloat, string triggerName)>();
 
             foreach (var setting in settings)
             {
@@ -339,6 +342,9 @@ namespace Samirin33.NDMF.Components.Editor
                 var maxValue = ResizableSyncParameters.GetMaxSyncValue(setting);
                 var isFloat = setting.paramType == ResizableSyncParameters.ParamType.Float;
                 var intParamName = $"{paramName}_Int";
+                var triggerName = setting.fireValueChangedTrigger
+                    ? ResizableSyncParameters.GetValueChangedTriggerName(paramName)
+                    : null;
 
                 if (isFloat)
                 {
@@ -351,6 +357,8 @@ namespace Samirin33.NDMF.Components.Editor
                     controller.AddParameter(paramName, AnimatorControllerParameterType.Int);
                 }
                 controller.AddParameter(intParamName, AnimatorControllerParameterType.Int);
+                if (!string.IsNullOrEmpty(triggerName))
+                    EnsureAnimatorParameter(controller, triggerName, AnimatorControllerParameterType.Trigger);
                 for (int i = 0; i < bitCount; i++)
                 {
                     var syncParamName = ResizableSyncParameters.GetSyncBoolParamName(paramName, i);
@@ -358,8 +366,8 @@ namespace Samirin33.NDMF.Components.Editor
                     paramNamesToRegister.Add((syncParamName, ParameterSyncType.Bool));
                 }
 
-                var layer = CreateLayerForParam(intParamName, bitCount, maxValue, emptyMotion, writeDefault);
-                layersToAdd.Add((layer, paramName, intParamName, bitCount, maxValue, isFloat));
+                var layer = CreateLayerForParam(intParamName, bitCount, maxValue, emptyMotion, writeDefault, triggerName);
+                layersToAdd.Add((layer, paramName, intParamName, bitCount, maxValue, isFloat, triggerName));
             }
 
             controller.RemoveLayer(0);
@@ -378,13 +386,13 @@ namespace Samirin33.NDMF.Components.Editor
                     controller.AddLayer(rangeLayer);
             }
 
-            foreach (var (layer, _, _, _, _, _) in layersToAdd)
+            foreach (var (layer, _, _, _, _, _, _) in layersToAdd)
                 controller.AddLayer(layer);
 
             AnimatorControllerAssetUtility.RegisterControllerHierarchy(controller);
 
-            foreach (var (_, _, intParamName, bitCount, maxValue, _) in layersToAdd)
-                AddParamDriverBehaviours(controller, intParamName, bitCount, maxValue, paramDriverType);
+            foreach (var (_, _, intParamName, bitCount, maxValue, _, triggerName) in layersToAdd)
+                AddParamDriverBehaviours(controller, intParamName, bitCount, maxValue, paramDriverType, triggerName);
 
             AddRangeConvertParamDrivers(controller, settings, paramDriverType);
 
@@ -401,8 +409,9 @@ namespace Samirin33.NDMF.Components.Editor
             => AnimatorControllerAssetUtility.EnsureSubAsset(obj, mainAsset);
 
         private static AnimatorControllerLayer CreateLayerForParam(string paramName, int bitCount, int maxValue,
-            AnimationClip emptyMotion, bool writeDefault)
+            AnimationClip emptyMotion, bool writeDefault, string valueChangedTriggerName)
         {
+            var fireTrigger = !string.IsNullOrEmpty(valueChangedTriggerName);
             var layerName = $"Convert_IntParam{paramName}{bitCount}bit";
             var rootSm = new AnimatorStateMachine { name = layerName };
 
@@ -435,12 +444,53 @@ namespace Samirin33.NDMF.Components.Editor
             var localBrunch = localSm.AddState("brunch", new Vector3(30, 180, 0));
             localBrunch.motion = emptyMotion;
             localBrunch.writeDefaultValues = writeDefault;
-            localSm.defaultState = localBrunch;
+
+            // トリガー有効時は Init から入り、初期値では発行しない。変化後だけ Changed を1フレーム通す。
+            AnimatorState localInit = null;
+            if (fireTrigger)
+            {
+                localInit = localSm.AddState("Init", new Vector3(30, 40, 0));
+                localInit.motion = emptyMotion;
+                localInit.writeDefaultValues = writeDefault;
+                localSm.defaultState = localInit;
+            }
+            else
+            {
+                localSm.defaultState = localBrunch;
+            }
 
             var remoteBrunch = remoteSm.AddState("brunch", new Vector3(30, 160, 0));
             remoteBrunch.motion = emptyMotion;
             remoteBrunch.writeDefaultValues = writeDefault;
             remoteSm.defaultState = remoteBrunch;
+
+            void ConfigureInstant(AnimatorStateTransition transition)
+            {
+                transition.hasExitTime = false;
+                transition.exitTime = 0f;
+                transition.duration = 0f;
+                transition.canTransitionToSelf = true;
+            }
+
+            void AddLocalMatch(AnimatorStateTransition transition, int value)
+            {
+                if (value == 0)
+                    transition.AddCondition(AnimatorConditionMode.Less, 1, paramName);
+                else if (value == maxValue)
+                    transition.AddCondition(AnimatorConditionMode.Greater, maxValue - 1, paramName);
+                else
+                    transition.AddCondition(AnimatorConditionMode.Equals, value, paramName);
+            }
+
+            void AddLocalMismatch(AnimatorStateTransition transition, int value)
+            {
+                if (value == 0)
+                    transition.AddCondition(AnimatorConditionMode.Greater, 0, paramName);
+                else if (value == maxValue)
+                    transition.AddCondition(AnimatorConditionMode.Less, maxValue, paramName);
+                else
+                    transition.AddCondition(AnimatorConditionMode.NotEqual, value, paramName);
+            }
 
             for (int value = 0; value <= maxValue; value++)
             {
@@ -452,31 +502,38 @@ namespace Samirin33.NDMF.Components.Editor
                 remoteState.motion = emptyMotion;
                 remoteState.writeDefaultValues = writeDefault;
 
-                // Local: brunch → Binary（Int 条件）
-                var localIn = localBrunch.AddTransition(localState);
-                localIn.hasExitTime = false;
-                localIn.exitTime = 0f;
-                localIn.duration = 0f;
-                localIn.canTransitionToSelf = true;
-                if (value == 0)
-                    localIn.AddCondition(AnimatorConditionMode.Less, 1, paramName);
-                else if (value == maxValue)
-                    localIn.AddCondition(AnimatorConditionMode.Greater, maxValue - 1, paramName);
+                if (fireTrigger)
+                {
+                    var localChanged = localSm.AddState($"Changed {value}", new Vector3(560, 120 + value * 40, 0));
+                    localChanged.motion = emptyMotion;
+                    localChanged.writeDefaultValues = writeDefault;
+
+                    // 初期進入はトリガーを出さず Binary へ
+                    var initIn = localInit.AddTransition(localState);
+                    ConfigureInstant(initIn);
+                    AddLocalMatch(initIn, value);
+
+                    // 変化後の再進入だけ Changed を1フレーム通し、そこでトリガーを立てる
+                    var changedIn = localBrunch.AddTransition(localChanged);
+                    ConfigureInstant(changedIn);
+                    AddLocalMatch(changedIn, value);
+
+                    var changedOut = localChanged.AddTransition(localState);
+                    ConfigureInstant(changedOut);
+                    changedOut.AddCondition(AnimatorConditionMode.If, 0, "dummy");
+                }
                 else
-                    localIn.AddCondition(AnimatorConditionMode.Equals, value, paramName);
+                {
+                    // Local: brunch → Binary（Int 条件）
+                    var localIn = localBrunch.AddTransition(localState);
+                    ConfigureInstant(localIn);
+                    AddLocalMatch(localIn, value);
+                }
 
                 // Local: Binary → brunch（値が変わったら戻る）
                 var localOut = localState.AddTransition(localBrunch);
-                localOut.hasExitTime = false;
-                localOut.exitTime = 0f;
-                localOut.duration = 0f;
-                localOut.canTransitionToSelf = true;
-                if (value == 0)
-                    localOut.AddCondition(AnimatorConditionMode.Greater, 0, paramName);
-                else if (value == maxValue)
-                    localOut.AddCondition(AnimatorConditionMode.Less, maxValue, paramName);
-                else
-                    localOut.AddCondition(AnimatorConditionMode.NotEqual, value, paramName);
+                ConfigureInstant(localOut);
+                AddLocalMismatch(localOut, value);
 
                 // Remote: brunch → Binary（同期 Bool が value なのに Int が違うとき）
                 var remoteIn = remoteBrunch.AddTransition(remoteState);
@@ -732,7 +789,7 @@ namespace Samirin33.NDMF.Components.Editor
         }
 
         private static void AddParamDriverBehaviours(AnimatorController controller, string paramName, int bitCount, int maxValue,
-            Type paramDriverType)
+            Type paramDriverType, string valueChangedTriggerName)
         {
             if (paramDriverType == null || !typeof(StateMachineBehaviour).IsAssignableFrom(paramDriverType)) return;
 
@@ -748,9 +805,13 @@ namespace Samirin33.NDMF.Components.Editor
                     foreach (var childState in childSm.stateMachine.states)
                     {
                         var state = childState.state;
-                        if (!state.name.StartsWith("Binary ", StringComparison.Ordinal))
+                        var isBinary = state.name.StartsWith("Binary ", StringComparison.Ordinal);
+                        var isChanged = state.name.StartsWith("Changed ", StringComparison.Ordinal);
+                        if (!isBinary && !isChanged)
                             continue;
-                        if (!int.TryParse(state.name.Substring("Binary ".Length), out var value))
+
+                        var prefixLength = isBinary ? "Binary ".Length : "Changed ".Length;
+                        if (!int.TryParse(state.name.Substring(prefixLength), out var value))
                             continue;
 
                         var behaviour = state.AddStateMachineBehaviour(paramDriverType);
@@ -763,9 +824,51 @@ namespace Samirin33.NDMF.Components.Editor
                             boolValues[b] = ((value >> b) & 1) != 0;
 
                         SetParamDriverParameters(behaviour, paramName, value, boolValues, isLocal);
+
+                        // Local は Changed の1フレーム、Remote は元々1フレームの Binary でトリガーを立てる。
+                        var fireTrigger = !string.IsNullOrEmpty(valueChangedTriggerName)
+                            && ((isLocal && isChanged) || (!isLocal && isBinary));
+                        if (fireTrigger)
+                            AddSetTriggerBehaviour(state, controller, valueChangedTriggerName, paramDriverType);
                     }
                 }
             }
+        }
+
+        private static void EnsureAnimatorParameter(AnimatorController controller, string name, AnimatorControllerParameterType type)
+        {
+            if (controller == null || string.IsNullOrEmpty(name))
+                return;
+
+            foreach (var parameter in controller.parameters)
+            {
+                if (parameter.name == name)
+                    return;
+            }
+
+            controller.AddParameter(name, type);
+        }
+
+        private static void AddSetTriggerBehaviour(AnimatorState state, AnimatorController controller, string triggerName, Type paramDriverType)
+        {
+            if (state == null || string.IsNullOrEmpty(triggerName) || paramDriverType == null)
+                return;
+
+            var behaviour = state.AddStateMachineBehaviour(paramDriverType);
+            if (behaviour == null)
+                return;
+
+            EnsureSubAsset(behaviour, controller);
+
+            var so = new SerializedObject(behaviour);
+            var parametersProp = so.FindProperty("parameters");
+            if (parametersProp == null)
+                return;
+
+            parametersProp.ClearArray();
+            parametersProp.InsertArrayElementAtIndex(0);
+            SetParamDriverEntry(parametersProp.GetArrayElementAtIndex(0), triggerName, 1);
+            so.ApplyModifiedPropertiesWithoutUndo();
         }
 
         private static void SetParamDriverParameters(StateMachineBehaviour behaviour, string paramName, int intValue, bool[] boolValues, bool isLocal)
@@ -849,14 +952,14 @@ namespace Samirin33.NDMF.Components.Editor
         }
 
         private static void AddModularAvatarModule(GameObject parentObject, AnimatorController controller,
-            List<(string name, ParameterSyncType syncType)> paramNamesToRegister)
+            List<(string name, ParameterSyncType syncType)> paramNamesToRegister, bool matchAvatarWriteDefaults)
         {
             var moduleRoot = ModularAvatarMergeAnimatorUtility.RegisterMergeAnimatorModule(
                 parentObject,
                 "ResizableSyncParameters_Module",
                 controller,
                 layerPriority: 0,
-                matchAvatarWriteDefaults: false);
+                matchAvatarWriteDefaults: matchAvatarWriteDefaults);
             if (moduleRoot == null)
                 return;
 

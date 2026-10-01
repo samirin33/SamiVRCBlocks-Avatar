@@ -27,11 +27,27 @@ namespace Samirin33.NDMF.Base.Plugin
             });
 
             seq = InPhase(BuildPhase.Resolving);
-            seq.AfterPlugin("SamirinResolvingBeforeMA");
+            seq.AfterPlugin("nadena.dev.modular-avatar");
             seq.Run("SamirinResolvingAfterMA", ctx =>
             {
                 SamirinMABase[] scripts = ctx.AvatarRootObject.GetComponentsInChildren<SamirinMABase>(true);
                 InvokeOnBuild(scripts, BuildPhase.Resolving, false, ctx.AvatarRootObject);
+            });
+
+            seq = InPhase(BuildPhase.Generating);
+            seq.BeforePlugin("nadena.dev.modular-avatar");
+            seq.Run("SamirinGeneratingBeforeMA", ctx =>
+            {
+                SamirinMABase[] scripts = ctx.AvatarRootObject.GetComponentsInChildren<SamirinMABase>(true);
+                InvokeOnBuild(scripts, BuildPhase.Generating, true, ctx.AvatarRootObject);
+            });
+
+            seq = InPhase(BuildPhase.Generating);
+            seq.AfterPlugin("nadena.dev.modular-avatar");
+            seq.Run("SamirinGeneratingAfterMA", ctx =>
+            {
+                SamirinMABase[] scripts = ctx.AvatarRootObject.GetComponentsInChildren<SamirinMABase>(true);
+                InvokeOnBuild(scripts, BuildPhase.Generating, false, ctx.AvatarRootObject);
             });
 
             seq = InPhase(BuildPhase.Transforming);
@@ -43,27 +59,11 @@ namespace Samirin33.NDMF.Base.Plugin
             });
 
             seq = InPhase(BuildPhase.Transforming);
-            seq.AfterPlugin("SamirinTransformingBeforeMA");
+            seq.AfterPlugin("nadena.dev.modular-avatar");
             seq.Run("SamirinTransformingAfterMA", ctx =>
             {
                 SamirinMABase[] scripts = ctx.AvatarRootObject.GetComponentsInChildren<SamirinMABase>(true);
                 InvokeOnBuild(scripts, BuildPhase.Transforming, false, ctx.AvatarRootObject);
-            });
-
-            seq = InPhase(BuildPhase.Generating);
-            seq.BeforePlugin("nadena.dev.modular-avatar");
-            seq.Run("SamirinGeneratingBeforeMA", ctx =>
-            {
-                SamirinMABase[] scripts = ctx.AvatarRootObject.GetComponentsInChildren<SamirinMABase>(true);
-                InvokeOnBuild(scripts, BuildPhase.Generating, true, ctx.AvatarRootObject);
-            });
-
-            seq = InPhase(BuildPhase.Transforming);
-            seq.AfterPlugin("SamirinGeneratingBeforeMA");
-            seq.Run("SamirinGeneratingAfterMA", ctx =>
-            {
-                SamirinMABase[] scripts = ctx.AvatarRootObject.GetComponentsInChildren<SamirinMABase>(true);
-                InvokeOnBuild(scripts, BuildPhase.Generating, false, ctx.AvatarRootObject);
             });
 
             seq = InPhase(BuildPhase.Optimizing);
@@ -75,7 +75,7 @@ namespace Samirin33.NDMF.Base.Plugin
             });
 
             seq = InPhase(BuildPhase.Optimizing);
-            seq.AfterPlugin("SamirinOptimizingBeforeMA");
+            seq.AfterPlugin("nadena.dev.modular-avatar");
             seq.Run("SamirinOptimizingAfterMA", ctx =>
             {
                 SamirinMABase[] scripts = ctx.AvatarRootObject.GetComponentsInChildren<SamirinMABase>(true);
