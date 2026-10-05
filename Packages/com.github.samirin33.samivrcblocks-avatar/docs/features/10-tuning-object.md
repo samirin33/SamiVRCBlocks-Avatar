@@ -4,7 +4,7 @@
 
 チューニング用の **ギズモ表示** と、任意 Transform への **オフセット適用** を行うコンポーネントです。
 自身または親が選択されているとき、Scene ビューに中心球・ボックス・カプセル・矢印・ラベル・半透明メッシュを描画します。
-**Active** 時は `targetTransforms` に「自身の Transform + Offset」を継続適用します。
+**Active** 時は `targetTransforms` に「自身の Transform + Offset」を適用します。適用は初回と、自身のローカル姿勢または Offset が変わったときだけで、親の移動では Target のローカル相対位置を維持します。
 **Preview Particles** 時は、TuningObject 自身の選択中のみ Target 配下の ParticleSystem をエディタ上でプレビュー再生します。
 
 ## 追加方法
@@ -21,7 +21,7 @@
 3. Active がオフのとき、各要素に次のボタンが表示されます
    - **Targetへ移動** — 自身を Target のワールド姿勢へ移動
    - **差分をOffsetに登録** — 自身と Target の現在差分を Offset に書き込む
-4. **Active** をオンにすると、各 Target に「自身 + Offset」が継続適用されます
+4. **Active** をオンにすると、各 Target に「自身 + Offset」を適用します。以降は自身のローカル姿勢か Offset を変えたときだけ再適用し、利き手切り替えなどで親だけが動いたときは Target のローカル相対位置を維持します
 
 ### 最初の状態（スナップ姿勢）
 
@@ -66,7 +66,7 @@
 
 ## 注意事項
 
-- Active 中は Target へ毎フレーム（エディタでは EditorUpdate）姿勢を書き込みます。意図しない上書きに注意してください。
+- Active 中の Target への姿勢書き込みは、初回と、TuningObject 自身のローカル姿勢または Offset が変わったときに限られます。親 Transform の移動だけでは書き戻しません。
 - パーティクルプレビューは **TuningObject 自身が直接選択されているときだけ** 動作します。親・Target・パーティクル本体を選んでも再生しません。
 - プレビュー終了時は `Clear` のみ行い `Stop()` は呼びません。パーティクル本体を選択したときの Unity 標準の再生操作には干渉しません。
 

@@ -13,6 +13,7 @@ namespace Samirin33.NDMF.Components
     /// チューニング用のギズモ表示コンポーネント。
     /// 自身または親が選択されているとき、矢印・中心球・ボックス・カプセル・任意テキスト・半透明メッシュを Scene ビューに描画する。
     /// active 時は targetTransforms に自身+Offset を適用する。
+    /// 適用は初回と、自身のローカル姿勢または Offset が変わったときだけで、それ以外は Target のローカル相対位置を維持する。
     /// previewParticles 時は Target 配下の ParticleSystem をエディタ上でプレビュー再生する。
     /// ビルド時、子が無い場合は自身の GameObject を削除する。
     /// </summary>
@@ -59,7 +60,7 @@ namespace Samirin33.NDMF.Components
             public bool localSpace = true;
         }
 
-        [Tooltip("true のとき、Target に自身の Transform + Offset を継続適用する")]
+        [Tooltip("true のとき、Target に自身の Transform + Offset を適用する。初回と、自身のローカル姿勢または Offset が変わったときだけで、親の移動では Target のローカル相対位置を維持する")]
         public bool active;
 
         [Tooltip("true のとき、TuningObject 自身の選択中のみ Target 配下の ParticleSystem をエディタ上でプレビュー再生する")]
@@ -156,14 +157,113 @@ namespace Samirin33.NDMF.Components
         [Tooltip("メッシュのローカルスケール")]
         public Vector3 meshScale = Vector3.one;
 
+        /// <summary>
+        /// 直前に Target へ適用したときの駆動元。未適用なら false。
+        /// ドメインリロード後に再適用して利き手の結果を戻さないよう、インスタンスへ保存する。
+        /// </summary>
+        [SerializeField, HideInInspector]
+        private bool _targetApplyStampValid;
+
+        [SerializeField, HideInInspector]
+        private Vector3 _targetApplyLocalPosition;
+
+        [SerializeField, HideInInspector]
+        private Quaternion _targetApplyLocalRotation;
+
+        [SerializeField, HideInInspector]
+        private Vector3 _targetApplyLocalScale;
+
+        [SerializeField, HideInInspector]
+        private int _targetApplyOffsetHash;
+
         private void Update()
         {
-            if (!active) return;
 #if UNITY_EDITOR
             // エディタでは EditorUpdate 側で適用する（配置スナップ待ち中に Target を動かさない）
             if (!Application.isPlaying) return;
 #endif
+            TryApplyToTargetsIfDriven();
+        }
+
+        /// <summary>
+        /// Active の Target 適用を、初回と駆動元（ローカル姿勢・Offset）の変化時に限る。
+        /// 親だけが動いたフレームでは書き戻さないので、利き手切り替え後も子のローカル相対位置が残る。
+        /// </summary>
+        private void TryApplyToTargetsIfDriven()
+        {
+            if (!active)
+            {
+                _targetApplyStampValid = false;
+                return;
+            }
+
+            if (!HasDrivingPoseChanged())
+                return;
+
             ApplyToTargets();
+            CaptureDrivingPose();
+        }
+
+        private bool HasDrivingPoseChanged()
+        {
+            if (!_targetApplyStampValid)
+                return true;
+
+            if ((transform.localPosition - _targetApplyLocalPosition).sqrMagnitude > 1e-12f)
+                return true;
+            if (Mathf.Abs(Quaternion.Dot(transform.localRotation, _targetApplyLocalRotation)) < 0.9999999f)
+                return true;
+            if ((transform.localScale - _targetApplyLocalScale).sqrMagnitude > 1e-12f)
+                return true;
+            return ComputeOffsetHash() != _targetApplyOffsetHash;
+        }
+
+        private void CaptureDrivingPose()
+        {
+            _targetApplyStampValid = true;
+            _targetApplyLocalPosition = transform.localPosition;
+            _targetApplyLocalRotation = transform.localRotation;
+            _targetApplyLocalScale = transform.localScale;
+            _targetApplyOffsetHash = ComputeOffsetHash();
+        }
+
+        private int ComputeOffsetHash()
+        {
+            unchecked
+            {
+                var hash = 17;
+                if (targetTransforms == null)
+                    return hash;
+
+                hash = hash * 31 + targetTransforms.Length;
+                for (int i = 0; i < targetTransforms.Length; i++)
+                {
+                    var entry = targetTransforms[i];
+                    if (entry == null)
+                    {
+                        hash *= 31;
+                        continue;
+                    }
+
+                    hash = hash * 31 + (entry.transform != null ? entry.transform.GetInstanceID() : 0);
+                    hash = HashVector(hash, entry.offsetPosition);
+                    hash = HashVector(hash, entry.offsetRotation);
+                    hash = HashVector(hash, entry.offsetScale);
+                }
+
+                return hash;
+            }
+        }
+
+        private static int HashVector(int hash, Vector3 value)
+        {
+            unchecked
+            {
+                hash = hash * 31 + value.x.GetHashCode();
+                hash = hash * 31 + value.y.GetHashCode();
+                hash = hash * 31 + value.z.GetHashCode();
+                return hash;
+            }
         }
 
         public override void OnBuild(SamirinBuildPhase buildPhase, bool beforeModularAvatar, GameObject avatarRootObject)
@@ -395,6 +495,8 @@ namespace Samirin33.NDMF.Components
             {
                 if (_placementSnapCompleted)
                     _placementSnapCompleted = false;
+                if (_targetApplyStampValid)
+                    _targetApplyStampValid = false;
             }
 
             if (!previewParticles && _particlePreviewActive)
@@ -456,8 +558,6 @@ namespace Samirin33.NDMF.Components
                 if (PrefabUtility.IsPartOfPrefabInstance(this))
                     PrefabUtility.RecordPrefabInstancePropertyModifications(this);
 
-                if (active)
-                    ApplyToTargets();
                 return;
             }
 
@@ -481,8 +581,7 @@ namespace Samirin33.NDMF.Components
                     return;
             }
 
-            if (active)
-                ApplyToTargets();
+            TryApplyToTargetsIfDriven();
 
             UpdateParticlePreview();
         }
