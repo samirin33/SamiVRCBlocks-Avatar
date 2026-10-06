@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
 using nadena.dev.ndmf;
+using Samirin33.NDMF.Animation;
 using Samirin33.NDMF.Base;
 using Samirin33.NDMF.Base.Plugin;
 
@@ -52,6 +53,8 @@ namespace Samirin33.NDMF.Base.Plugin
 
             seq = InPhase(BuildPhase.Transforming);
             seq.BeforePlugin("nadena.dev.modular-avatar");
+            // Bone Proxy が Head を付け替える前に、Play Audio の対象 Transform を覚えておく。
+            seq.Run("SamirinCaptureBoneProxyPlayAudio", BoneProxyPlayAudioPathFix.Execute);
             seq.Run("SamirinTransformingBeforeMA", ctx =>
             {
                 SamirinMABase[] scripts = ctx.AvatarRootObject.GetComponentsInChildren<SamirinMABase>(true);
@@ -68,6 +71,8 @@ namespace Samirin33.NDMF.Base.Plugin
                 SamirinMABase[] scripts = ctx.AvatarRootObject.GetComponentsInChildren<SamirinMABase>(true);
                 InvokeOnBuild(scripts, BuildPhase.Transforming, false, ctx.AvatarRootObject);
             });
+            // Head (1) などの改名と OriginalArmature への移動が終わってからパスを書く。
+            seq.Run("SamirinApplyBoneProxyPlayAudio", BoneProxyPlayAudioPathFix.ApplyResolvedPaths);
 
             seq = InPhase(BuildPhase.Optimizing);
             seq.BeforePlugin("nadena.dev.modular-avatar");
