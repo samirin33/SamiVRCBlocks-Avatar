@@ -304,6 +304,74 @@ namespace Samirin33.NDMF.Components
         }
 
         /// <summary>
+        /// sourceBefore から sourceAfter へのワールド姿勢の変化と同じだけ自身を動かす。
+        /// 利き手切り替えで Bone Proxy などが動いたとき、ギズモを追従させる。
+        /// Active でも Target へは書き戻さず、駆動元スタンプだけ更新する。
+        /// </summary>
+        public void FollowWorldPose(Matrix4x4 sourceBefore, Matrix4x4 sourceAfter, bool recordUndo = true)
+        {
+            if (!HasWorldPoseChanged(sourceBefore, sourceAfter))
+                return;
+
+            var result = sourceAfter * sourceBefore.inverse * transform.localToWorldMatrix;
+            var position = result.GetPosition();
+            var rotation = result.rotation;
+            var scale = result.lossyScale;
+            if (!IsFinite(position) || !IsFinite(rotation) || !IsFinite(scale))
+                return;
+
+#if UNITY_EDITOR
+            if (recordUndo)
+            {
+                Undo.RecordObject(transform, "Move TuningObject with Dominant Hand");
+                Undo.RecordObject(this, "Move TuningObject with Dominant Hand");
+            }
+#endif
+            transform.SetPositionAndRotation(position, rotation);
+            if ((scale - transform.lossyScale).sqrMagnitude > 1e-12f)
+                SetLossyScale(transform, scale);
+
+            if (active)
+                CaptureDrivingPose();
+            else
+                _targetApplyStampValid = false;
+
+#if UNITY_EDITOR
+            EditorUtility.SetDirty(transform);
+            EditorUtility.SetDirty(this);
+            if (PrefabUtility.IsPartOfPrefabInstance(transform))
+            {
+                PrefabUtility.RecordPrefabInstancePropertyModifications(transform);
+                PrefabUtility.RecordPrefabInstancePropertyModifications(this);
+            }
+#endif
+        }
+
+        private static bool HasWorldPoseChanged(Matrix4x4 before, Matrix4x4 after)
+        {
+            if ((before.GetPosition() - after.GetPosition()).sqrMagnitude > 1e-10f)
+                return true;
+            if (Quaternion.Angle(before.rotation, after.rotation) > 0.01f)
+                return true;
+            return (before.lossyScale - after.lossyScale).sqrMagnitude > 1e-10f;
+        }
+
+        private static bool IsFinite(Vector3 value)
+        {
+            return IsFinite(value.x) && IsFinite(value.y) && IsFinite(value.z);
+        }
+
+        private static bool IsFinite(Quaternion value)
+        {
+            return IsFinite(value.x) && IsFinite(value.y) && IsFinite(value.z) && IsFinite(value.w);
+        }
+
+        private static bool IsFinite(float value)
+        {
+            return !float.IsNaN(value) && !float.IsInfinity(value);
+        }
+
+        /// <summary>
         /// 自身を指定 Target のワールド位置・回転・スケールへ移動する。
         /// </summary>
         public void MoveSelfToTarget(int index)

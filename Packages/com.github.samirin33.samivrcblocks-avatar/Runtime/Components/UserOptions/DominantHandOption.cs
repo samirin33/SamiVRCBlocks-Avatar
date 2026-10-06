@@ -7,11 +7,12 @@ using Samirin33.NDMF.Base;
 
 namespace Samirin33.NDMF.Components
 {
-    /// <summary>
-    /// 利き手（右手 / 左手）を選び、登録した MA Bone Proxy の Humanoid ボーン、
-    /// FixHandVector の Hand Type、任意 Transform の位置・回転を、その利き手用の値へ切り替える。
-    /// ビルド時（Resolving / MA 前）に選択中の利き手を適用して自身を削除する。
-    /// </summary>
+        /// <summary>
+        /// 利き手（右手 / 左手）を選び、登録した MA Bone Proxy の Humanoid ボーン、
+        /// FixHandVector の Hand Type、任意 Transform の位置・回転を、その利き手用の値へ切り替える。
+        /// 同じ GameObject の TuningObject は、その移動のワールド差分だけ追従する。
+        /// ビルド時（Resolving / MA 前）に選択中の利き手を適用して自身を削除する。
+        /// </summary>
     [DisallowMultipleComponent]
     [AddComponentMenu("SamiVRCBlocks-Avatar/SB DominantHandOption")]
     public class DominantHandOption : SamirinMABase
@@ -65,6 +66,13 @@ namespace Samirin33.NDMF.Components
             public bool localRotation = true;
             public Vector3 rotationRight;
             public Vector3 rotationLeft;
+        }
+
+        /// <summary>利き手適用前の、移動対象 Transform のワールド姿勢。</summary>
+        public struct MovedTransformSample
+        {
+            public Transform transform;
+            public Matrix4x4 world;
         }
 
         static readonly MethodInfo BoneProxyClearCacheMethod =
@@ -127,6 +135,46 @@ namespace Samirin33.NDMF.Components
                         break;
                 }
             }
+        }
+
+        /// <summary>
+        /// 利き手適用で動く Transform の、現在のワールド姿勢を記録する。
+        /// Apply と FixHandVector の回転補正のあとで <see cref="MoveTuningObject"/> に渡す。
+        /// </summary>
+        public void SampleMovedTransforms(List<MovedTransformSample> results)
+        {
+            if (results == null || entries == null)
+                return;
+
+            for (var i = 0; i < entries.Count; i++)
+            {
+                var mover = GetMovedTransform(entries[i]);
+                if (mover == null || ContainsTransform(results, mover))
+                    continue;
+
+                results.Add(new MovedTransformSample
+                {
+                    transform = mover,
+                    world = mover.localToWorldMatrix,
+                });
+            }
+        }
+
+        /// <summary>
+        /// 同じ GameObject の TuningObject を、利き手適用で動いた Transform のワールド差分だけ移動する。
+        /// 親子になっている場合は階層側が既に動くので、ここでは動かさない。
+        /// 変化した Transform が親子なら、一番深いものの差分だけ使う（親の移動は子のワールド姿勢に含まれる）。
+        /// </summary>
+        public void MoveTuningObject(List<MovedTransformSample> before, bool recordUndo = true)
+        {
+            var tuning = GetComponent<TuningObject>();
+            if (tuning == null || before == null || before.Count == 0)
+                return;
+
+            if (!TryGetDeepestChangedMover(before, tuning.transform, out var driver, out var driverBefore))
+                return;
+
+            tuning.FollowWorldPose(driverBefore, driver.localToWorldMatrix, recordUndo);
         }
 
         public void CollectApplyTargets(List<UnityEngine.Object> results)
@@ -222,6 +270,110 @@ namespace Samirin33.NDMF.Components
                 else
                     targetTransform.eulerAngles = value;
             }
+        }
+
+        Transform GetMovedTransform(Entry entry)
+        {
+            if (entry == null)
+                return null;
+
+            switch (entry.type)
+            {
+                case EntryType.BoneProxy:
+                    return entry.boneProxy != null ? entry.boneProxy.transform : null;
+                case EntryType.FixHandVector:
+                    return entry.fixHandVector != null ? entry.fixHandVector.transform : null;
+                case EntryType.Transform:
+                    if (entry.target != null && (entry.setPosition || entry.setRotation))
+                        return entry.target;
+                    return null;
+                default:
+                    return null;
+            }
+        }
+
+        static bool ContainsTransform(List<MovedTransformSample> samples, Transform transform)
+        {
+            for (var i = 0; i < samples.Count; i++)
+            {
+                if (samples[i].transform == transform)
+                    return true;
+            }
+
+            return false;
+        }
+
+        static bool TryGetDeepestChangedMover(
+            List<MovedTransformSample> before,
+            Transform tuningTransform,
+            out Transform driver,
+            out Matrix4x4 driverBefore)
+        {
+            driver = null;
+            driverBefore = Matrix4x4.identity;
+            var bestDepth = int.MinValue;
+
+            for (var i = 0; i < before.Count; i++)
+            {
+                var sample = before[i];
+                var candidate = sample.transform;
+                if (candidate == null)
+                    continue;
+                if (!HasWorldPoseChanged(sample.world, candidate.localToWorldMatrix))
+                    continue;
+                if (SharesHierarchy(tuningTransform, candidate))
+                    continue;
+                if (HasChangedDescendant(before, candidate))
+                    continue;
+
+                var depth = GetDepth(candidate);
+                if (depth < bestDepth)
+                    continue;
+
+                bestDepth = depth;
+                driver = candidate;
+                driverBefore = sample.world;
+            }
+
+            return driver != null;
+        }
+
+        static bool HasChangedDescendant(List<MovedTransformSample> before, Transform ancestor)
+        {
+            for (var i = 0; i < before.Count; i++)
+            {
+                var other = before[i].transform;
+                if (other == null || other == ancestor)
+                    continue;
+                if (!other.IsChildOf(ancestor))
+                    continue;
+                if (HasWorldPoseChanged(before[i].world, other.localToWorldMatrix))
+                    return true;
+            }
+
+            return false;
+        }
+
+        static bool SharesHierarchy(Transform a, Transform b)
+        {
+            return a == b || a.IsChildOf(b) || b.IsChildOf(a);
+        }
+
+        static int GetDepth(Transform transform)
+        {
+            var depth = 0;
+            for (var current = transform; current != null; current = current.parent)
+                depth++;
+            return depth;
+        }
+
+        static bool HasWorldPoseChanged(Matrix4x4 before, Matrix4x4 after)
+        {
+            if ((before.GetPosition() - after.GetPosition()).sqrMagnitude > 1e-10f)
+                return true;
+            if (Quaternion.Angle(before.rotation, after.rotation) > 0.01f)
+                return true;
+            return (before.lossyScale - after.lossyScale).sqrMagnitude > 1e-10f;
         }
 
         static void RefreshBoneProxy(ModularAvatarBoneProxy proxy)

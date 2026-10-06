@@ -62,6 +62,7 @@ namespace Samirin33.NDMF.Components.Editor
                 {
                     DrawHelpBoxWithDefaultFont(
                         "利き手を選ぶと、リストに登録した MA Bone Proxy の Humanoid ボーン、FixHandVector の Hand Type、任意の Transform の位置・回転を、その利き手用の値に切り替えます。\n" +
+                        "同じオブジェクトの TuningObject も、その移動に合わせて動きます。\n" +
                         "Bone Proxy の Humanoid や Transform の姿勢を合わせたあと「現在値を記録」し、数値は「選択中の利き手を適用」で反映します。\n" +
                         "アップロード時（MA より前）にもう一度適用し、このコンポーネントは削除されます。",
                         MessageType.Info);
@@ -370,6 +371,7 @@ namespace Samirin33.NDMF.Components.Editor
         {
             var mutated = new List<Object>();
             var options = new List<DominantHandOption>();
+            var samples = new List<List<DominantHandOption.MovedTransformSample>>();
 
             foreach (var selected in targets)
             {
@@ -378,15 +380,28 @@ namespace Samirin33.NDMF.Components.Editor
 
                 options.Add(option);
                 option.CollectApplyTargets(mutated);
+
+                var sample = new List<DominantHandOption.MovedTransformSample>();
+                option.SampleMovedTransforms(sample);
+                samples.Add(sample);
+
+                var tuning = option.GetComponent<TuningObject>();
+                if (tuning != null)
+                {
+                    mutated.Add(tuning);
+                    mutated.Add(tuning.transform);
+                }
             }
 
             if (mutated.Count > 0)
                 Undo.RecordObjects(mutated.ToArray(), "利き手を適用");
 
-            foreach (var option in options)
+            for (var i = 0; i < options.Count; i++)
             {
+                var option = options[i];
                 option.Apply();
                 ReapplyFixHandVectors(option);
+                option.MoveTuningObject(samples[i], recordUndo: false);
                 EditorUtility.SetDirty(option);
             }
 
