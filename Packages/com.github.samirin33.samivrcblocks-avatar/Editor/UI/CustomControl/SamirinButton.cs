@@ -183,7 +183,7 @@ namespace Samirin.VRCUtility.Avatars
             var icon = ButtonIcon;
             if (icon == null) return;
             icon.style.backgroundImage = texture != null ? new StyleBackground(texture) : StyleKeyword.Null;
-            icon.style.unityBackgroundScaleMode = ScaleMode.ScaleToFit;
+            SetBackgroundScaleToFit(icon);
         }
 
         /// <summary>アイコン画像を指定した VectorImage に差し替えます。</summary>
@@ -192,7 +192,15 @@ namespace Samirin.VRCUtility.Avatars
             var icon = ButtonIcon;
             if (icon == null) return;
             icon.style.backgroundImage = vectorImage != null ? new StyleBackground(vectorImage) : StyleKeyword.Null;
-            icon.style.unityBackgroundScaleMode = ScaleMode.ScaleToFit;
+            SetBackgroundScaleToFit(icon);
+        }
+
+        static void SetBackgroundScaleToFit(VisualElement element)
+        {
+            element.style.backgroundSize = new BackgroundSize(BackgroundSizeType.Contain);
+            element.style.backgroundRepeat = new BackgroundRepeat(Repeat.NoRepeat, Repeat.NoRepeat);
+            element.style.backgroundPositionX = new BackgroundPosition(BackgroundPositionKeyword.Center);
+            element.style.backgroundPositionY = new BackgroundPosition(BackgroundPositionKeyword.Center);
         }
 
         /// <summary>プロジェクト内のアセットパスでアイコン画像を差し替えます。テクスチャまたは VectorImage に対応。</summary>

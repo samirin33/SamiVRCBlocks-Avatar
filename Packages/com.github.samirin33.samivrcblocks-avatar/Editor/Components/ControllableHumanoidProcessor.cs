@@ -101,37 +101,20 @@ namespace Samirin33.NDMF.Components.Editor
                 boneMap[original] = cloned;
             }
 
-            foreach (var kvp in boneMap)
+            // 親より先に子を置くと、ワールド姿勢のコピーが親の初期値（原点）基準になる。
+            var pending = new List<Transform>(boneMap.Keys);
+            var placed = new HashSet<Transform>();
+            var guard = pending.Count;
+            while (pending.Count > 0 && guard-- >= 0)
             {
-                var original = kvp.Key;
-                var cloned = kvp.Value;
-                var parent = original.parent;
+                var index = pending.FindIndex(original => IsCloneParentReady(original, armatureRoot, boneMap, placed));
+                if (index < 0)
+                    index = 0;
 
-                if (parent == armatureRoot)
-                {
-                    cloned.SetParent(clonedArmature, false);
-                    TransformMath.CopyLocalPose(original, cloned);
-                    continue;
-                }
-
-                if (parent != null && boneMap.TryGetValue(parent, out var clonedParentBone))
-                {
-                    cloned.SetParent(clonedParentBone, false);
-                    TransformMath.CopyLocalPose(original, cloned);
-                    continue;
-                }
-
-                var ancestor = NearestHumanoidAncestor(original, humanoidBones);
-                if (ancestor != null && boneMap.TryGetValue(ancestor, out var clonedAncestor))
-                {
-                    cloned.SetParent(clonedAncestor, false);
-                    TransformMath.CopyWorldPose(original, cloned);
-                }
-                else
-                {
-                    cloned.SetParent(clonedArmature, false);
-                    TransformMath.CopyWorldPose(original, cloned);
-                }
+                var original = pending[index];
+                pending.RemoveAt(index);
+                PlaceCloneBone(original, boneMap[original], armatureRoot, clonedArmature, boneMap, humanoidBones);
+                placed.Add(original);
             }
 
             var originalArmature = new GameObject(ControllableHumanoid.OriginalArmatureName).transform;
@@ -253,11 +236,13 @@ namespace Samirin33.NDMF.Components.Editor
             if (IsUnder(originalParent, parentChild))
                 return;
 
-            var clonedWorldPosition = TransformMath.GetWorldPosition(clonedParent);
-            var clonedWorldRotation = TransformMath.GetWorldRotation(clonedParent);
-            var clonedWorldScale = TransformMath.GetWorldScale(clonedParent);
+            // 複製側のワールド姿勢へ合わせると、スケール 100 の Armature では
+            // 逆変換が軸を入れ替えて NeckChild が約 (0, -0.01, 0) に寄る。
+            // 元ボーンの子としてローカル原点に置けば、ボーンと同じ場所になる。
             parentChild.SetParent(originalParent, false);
-            TransformMath.SetWorldPose(parentChild, clonedWorldPosition, clonedWorldRotation, clonedWorldScale);
+            parentChild.localPosition = Vector3.zero;
+            parentChild.localRotation = Quaternion.identity;
+            parentChild.localScale = Vector3.one;
 
             var children = new List<Transform>();
             foreach (var child in humanoidBones.Keys)
@@ -307,7 +292,13 @@ namespace Samirin33.NDMF.Components.Editor
 
             if (keepLocal)
             {
+                // ローカル値のコピーだと、Armature スケール 100 のモデルでは
+                // Neck→Head のような小さいローカル座標がスケール 1 の親の上で原点に潰れる。
+                var position = TransformMath.GetWorldPosition(bone);
+                var rotation = TransformMath.GetWorldRotation(bone);
+                var scale = TransformMath.GetWorldScale(bone);
                 bone.SetParent(parent, false);
+                TransformMath.SetWorldPose(bone, position, rotation, scale);
                 return;
             }
 
@@ -384,6 +375,60 @@ namespace Samirin33.NDMF.Components.Editor
             foreach (var child in children)
                 result.Add(child.bone);
             return result;
+        }
+
+        private static void PlaceCloneBone(
+            Transform original,
+            Transform cloned,
+            Transform armatureRoot,
+            Transform clonedArmature,
+            Dictionary<Transform, Transform> boneMap,
+            Dictionary<Transform, HumanBodyBones> humanoidBones)
+        {
+            var parent = original.parent;
+
+            if (parent == armatureRoot)
+            {
+                cloned.SetParent(clonedArmature, false);
+                TransformMath.CopyLocalPose(original, cloned);
+                return;
+            }
+
+            if (parent != null && boneMap.TryGetValue(parent, out var clonedParentBone))
+            {
+                cloned.SetParent(clonedParentBone, false);
+                TransformMath.CopyLocalPose(original, cloned);
+                return;
+            }
+
+            var ancestor = NearestHumanoidAncestor(original, humanoidBones);
+            if (ancestor != null && boneMap.TryGetValue(ancestor, out var clonedAncestor))
+            {
+                cloned.SetParent(clonedAncestor, false);
+                TransformMath.CopyWorldPose(original, cloned);
+            }
+            else
+            {
+                cloned.SetParent(clonedArmature, false);
+                TransformMath.CopyWorldPose(original, cloned);
+            }
+        }
+
+        private static bool IsCloneParentReady(
+            Transform original,
+            Transform armatureRoot,
+            Dictionary<Transform, Transform> boneMap,
+            HashSet<Transform> placed)
+        {
+            var parent = original.parent;
+            while (parent != null && parent != armatureRoot)
+            {
+                if (boneMap.ContainsKey(parent))
+                    return placed.Contains(parent);
+                parent = parent.parent;
+            }
+
+            return true;
         }
 
         private static Transform NearestHumanoidAncestor(
