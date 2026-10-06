@@ -60,6 +60,9 @@ namespace Samirin33.NDMF.Base.Plugin
 
             seq = InPhase(BuildPhase.Transforming);
             seq.AfterPlugin("nadena.dev.modular-avatar");
+            // メインプラグイン後の再バインド（late-transform-stages）より後。
+            // ここで Armature を複製すると、再バインドが同名ボーンを取り違えない。
+            seq.AfterPlugin("nadena.dev.modular-avatar.late-transform-stages");
             seq.Run("SamirinTransformingAfterMA", ctx =>
             {
                 SamirinMABase[] scripts = ctx.AvatarRootObject.GetComponentsInChildren<SamirinMABase>(true);

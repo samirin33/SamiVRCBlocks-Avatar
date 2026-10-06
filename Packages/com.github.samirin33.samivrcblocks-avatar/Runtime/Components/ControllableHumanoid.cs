@@ -210,7 +210,19 @@ namespace Samirin33.NDMF.Components
 
         public override void OnBuild(SamirinBuildPhase buildPhase, bool beforeModularAvatar, GameObject avatarRootObject)
         {
-            if (!beforeModularAvatar)
+            // パス書き換えは MA のアニメータ結合後に行う。
+            if (buildPhase == SamirinBuildPhase.Optimizing && beforeModularAvatar)
+            {
+                RemapFxHandler?.Invoke(this, avatarRootObject);
+                DestroyImmediate(this);
+                return;
+            }
+
+            // Merge Armature は mergeTarget をパスで解決する。
+            // Generating で同名 Armature を先に置くと、衣装のマージ先がその複製になり、
+            // 追従 Parent Constraint のソースがマージ削除で外れる。
+            // 分割は MA のマージとヒューマノイド再バインドの後に行う。
+            if (buildPhase != SamirinBuildPhase.Transforming || beforeModularAvatar)
                 return;
 
             var all = avatarRootObject.GetComponentsInChildren<ControllableHumanoid>(true);
@@ -218,38 +230,22 @@ namespace Samirin33.NDMF.Components
             {
                 if (all[0] == this)
                 {
-                    if (buildPhase == SamirinBuildPhase.Generating)
-                    {
-                        Debug.LogWarning(
-                            "[ControllableHumanoid] 1つのアバターに複数の ControllableHumanoid は同時に導入できません。" +
-                            "ヒューマノイドの複製とパス書き換えが衝突するため、最初のコンポーネントのみ処理し、残りは無視します。",
-                            this);
-                    }
+                    Debug.LogWarning(
+                        "[ControllableHumanoid] 1つのアバターに複数の ControllableHumanoid は同時に導入できません。" +
+                        "ヒューマノイドの複製とパス書き換えが衝突するため、最初のコンポーネントのみ処理し、残りは無視します。",
+                        this);
                 }
                 else
                 {
-                    if (buildPhase == SamirinBuildPhase.Generating)
-                    {
-                        Debug.LogWarning(
-                            "[ControllableHumanoid] 1つのアバターに複数の ControllableHumanoid は同時に導入できません。このコンポーネントは無視されます。",
-                            this);
-                        DestroyImmediate(this);
-                    }
+                    Debug.LogWarning(
+                        "[ControllableHumanoid] 1つのアバターに複数の ControllableHumanoid は同時に導入できません。このコンポーネントは無視されます。",
+                        this);
+                    DestroyImmediate(this);
                     return;
                 }
             }
 
-            if (buildPhase == SamirinBuildPhase.Generating)
-            {
-                BuildHandler?.Invoke(this, avatarRootObject);
-                return;
-            }
-
-            if (buildPhase == SamirinBuildPhase.Optimizing)
-            {
-                RemapFxHandler?.Invoke(this, avatarRootObject);
-                DestroyImmediate(this);
-            }
+            BuildHandler?.Invoke(this, avatarRootObject);
         }
 
 #if UNITY_EDITOR

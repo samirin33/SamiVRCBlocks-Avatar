@@ -135,7 +135,7 @@ namespace Samirin33.NDMF.Components
 
         public LinkedTransform()
         {
-            // ControllableHumanoid（Generating, 50）と MA Bone Proxy の後にベイクする。
+            // ControllableHumanoid（Transforming, 50。MA の後）より後にベイクする。
             priority = 200;
         }
 
