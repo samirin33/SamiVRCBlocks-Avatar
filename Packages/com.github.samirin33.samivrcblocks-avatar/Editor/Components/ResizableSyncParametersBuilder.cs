@@ -240,7 +240,8 @@ namespace Samirin33.NDMF.Components.Editor
         private static readonly string[] DefaultExcludedLayerNames = { "ParameterSmoothing", "Smoothed" };
 
         /// <summary>
-        /// Generating 後（afterModularAvatar）で呼ばれる置換処理。VRCAvatarDescriptor の FX レイヤーに作用する。
+        /// Optimizing（Modular Avatar より前）で呼ばれる置換処理。VRCAvatarDescriptor の FX レイヤーに作用する。
+        /// Float 参照だけを _Smoothed に付け替え、元パラメーターは残す。Parameter Driver の書き込み先は変えない。
         /// Smoothing 関連レイヤーは除外レイヤーとして指定し、置換対象外とする。
         /// </summary>
         public static void RunReplace(GameObject avatarRootObject, params ResizableSyncParameters[] resizableSyncParameters)

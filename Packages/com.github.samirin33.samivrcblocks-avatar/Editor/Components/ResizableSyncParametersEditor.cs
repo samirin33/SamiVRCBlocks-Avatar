@@ -229,7 +229,9 @@ namespace Samirin33.NDMF.Components.Editor
                 EditorGUI.BeginDisabledGroup(matchAvatarWriteDefaults);
                 EditorGUILayout.PropertyField(_writeDefault, new GUIContent("生成されるステートのWrite Default"));
                 EditorGUI.EndDisabledGroup();
-                EditorGUILayout.PropertyField(_replaceWithSmoothedInAnimator, new GUIContent("Animator内のFloatパラメーターをSmoothedに置き換える"));
+                EditorGUILayout.PropertyField(_replaceWithSmoothedInAnimator, new GUIContent(
+                    "Animator内のFloatパラメーターをSmoothedに置き換える",
+                    "参照だけ {名前}_Smoothed に付け替えます。_Smoothed でない元パラメーターは残し、Parameter Driver の書き込み先は変えません。"));
                 EditorGUILayout.EndVertical();
 
                 EditorGUILayout.Space(8);

@@ -13,10 +13,12 @@ namespace Samirin33.NDMF.Components.Editor
     public static class AnimatorParameterReplaceUtility
     {
         /// <summary>
-        /// 指定コントローラ内のパラメータ参照を fromParamName → toParamName に置換する。
-        /// 対象: パラメータ一覧、BlendTree の blendParameter/Y、Transition の Condition、
+        /// 指定コントローラ内のパラメータ参照を fromParamName → toParamName に付け替える。
+        /// 対象: BlendTree の blendParameter/Y、Transition の Condition、
         /// State の Motion Speed/Time 用パラメータ（m_SpeedParameter, m_TimeParameter 等）、
-        /// StateMachineBehaviour（ParameterDriver 等）の parameters 配列内 name/source、AnimationClip のカーブバインド。
+        /// AnimationClip のカーブバインド。
+        /// fromParamName 自体はパラメーター一覧から削除しない。参照が無くなっても残す。
+        /// VRC Parameter Driver の書き込み先（parameters[].name）と読み取り元（source）は変えない。
         /// excludedLayerNames に含まれる名前のレイヤーは置換対象外とする。
         /// </summary>
         public static void ReplaceParameterReferences(AnimatorController controller, string fromParamName, string toParamName, IReadOnlyCollection<string> excludedLayerNames = null)
@@ -29,6 +31,11 @@ namespace Samirin33.NDMF.Components.Editor
             var excludeSet = excludedLayerNames != null && excludedLayerNames.Count > 0
                 ? new HashSet<string>(excludedLayerNames, System.StringComparer.Ordinal)
                 : null;
+
+            // 参照を外したあとも、_Smoothed でない元パラメーター定義は残す。
+            var preserved = TryCaptureParameter(controller, fromParamName, out var preservedParameter)
+                ? preservedParameter
+                : (ParameterSnapshot?)null;
 
             EnsureParameterExists(controller, toParamName);
 
@@ -47,7 +54,58 @@ namespace Samirin33.NDMF.Components.Editor
                     ReplaceParameterInClip(clip, fromParamName, toParamName);
             }
 
+            if (preserved.HasValue)
+                RestoreParameterIfMissing(controller, preserved.Value);
+
             EditorUtility.SetDirty(controller);
+        }
+
+        private struct ParameterSnapshot
+        {
+            public string name;
+            public AnimatorControllerParameterType type;
+            public float defaultFloat;
+            public int defaultInt;
+            public bool defaultBool;
+        }
+
+        private static bool TryCaptureParameter(AnimatorController controller, string paramName, out ParameterSnapshot snapshot)
+        {
+            foreach (var parameter in controller.parameters)
+            {
+                if (parameter.name != paramName)
+                    continue;
+
+                snapshot = new ParameterSnapshot
+                {
+                    name = parameter.name,
+                    type = parameter.type,
+                    defaultFloat = parameter.defaultFloat,
+                    defaultInt = parameter.defaultInt,
+                    defaultBool = parameter.defaultBool,
+                };
+                return true;
+            }
+
+            snapshot = default;
+            return false;
+        }
+
+        private static void RestoreParameterIfMissing(AnimatorController controller, ParameterSnapshot snapshot)
+        {
+            if (string.IsNullOrEmpty(snapshot.name))
+                return;
+            if (controller.parameters.Any(p => p.name == snapshot.name))
+                return;
+
+            controller.AddParameter(new AnimatorControllerParameter
+            {
+                name = snapshot.name,
+                type = snapshot.type,
+                defaultFloat = snapshot.defaultFloat,
+                defaultInt = snapshot.defaultInt,
+                defaultBool = snapshot.defaultBool,
+            });
         }
 
         private static void EnsureParameterExists(AnimatorController controller, string paramName)
@@ -65,7 +123,7 @@ namespace Samirin33.NDMF.Components.Editor
             {
                 var s = state.state;
                 ReplaceInStateMotionParameters(s, from, to);
-                // ReplaceInStateBehaviours(s, from, to);
+                // Parameter Driver の書き込み先は付け替えない。Behaviour は走査しない。
                 if (s.motion is BlendTree blendTree)
                     ReplaceInBlendTree(blendTree, from, to);
             }
@@ -108,46 +166,6 @@ namespace Samirin33.NDMF.Components.Editor
             if (changed)
                 so.ApplyModifiedPropertiesWithoutUndo();
         }
-
-        // /// <summary>
-        // /// State にアタッチされた StateMachineBehaviour（ParameterDriver 等）の parameters 内 name/source を置換。
-        // /// </summary>
-        // private static void ReplaceInStateBehaviours(AnimatorState state, string from, string to)
-        // {
-        //     if (state == null) return;
-        //     var so = new SerializedObject(state);
-        //     var behArray = so.FindProperty("m_StateMachineBehaviours");
-        //     if (behArray == null || behArray.arraySize == 0) return;
-        //     for (int i = 0; i < behArray.arraySize; i++)
-        //     {
-        //         var refProp = behArray.GetArrayElementAtIndex(i);
-        //         if (refProp?.objectReferenceValue is StateMachineBehaviour beh)
-        //             ReplaceParameterInBehaviour(beh, from, to);
-        //     }
-        // }
-
-        // /// <summary>
-        // /// ParameterDriver 等の Behaviour 内で、parameters 配列の name / source が from のものを to に置換する。
-        // /// </summary>
-        // private static void ReplaceParameterInBehaviour(StateMachineBehaviour behaviour, string from, string to)
-        // {
-        //     if (behaviour == null) return;
-        //     var so = new SerializedObject(behaviour);
-        //     var parametersProp = so.FindProperty("parameters");
-        //     if (parametersProp == null || parametersProp.arraySize == 0) return;
-
-        //     bool changed = false;
-        //     for (int i = 0; i < parametersProp.arraySize; i++)
-        //     {
-        //         var entry = parametersProp.GetArrayElementAtIndex(i);
-        //         var nameProp = entry.FindPropertyRelative("name");
-        //         var sourceProp = entry.FindPropertyRelative("source");
-        //         if (nameProp != null && nameProp.stringValue == from) { nameProp.stringValue = to; changed = true; }
-        //         if (sourceProp != null && sourceProp.stringValue == from) { sourceProp.stringValue = to; changed = true; }
-        //     }
-        //     if (changed)
-        //         so.ApplyModifiedPropertiesWithoutUndo();
-        // }
 
         private static void ReplaceInBlendTree(BlendTree tree, string from, string to)
         {

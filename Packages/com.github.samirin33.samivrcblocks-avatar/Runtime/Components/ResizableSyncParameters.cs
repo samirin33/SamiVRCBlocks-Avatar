@@ -165,9 +165,11 @@ namespace Samirin33.NDMF.Components
         /// <summary>
         /// true の場合、生成する MA Merge Animator の Match Avatar Write Defaults を有効にする。
         /// </summary>
-        public bool matchAvatarWriteDefaults = true;
+        public bool matchAvatarWriteDefaults = false;
 
-        /// <summary> true の場合、ビルド時に親 Animator 内の Float パラメータ参照をすべて _Smoothed に置換する。 </summary>
+        /// <summary>
+        /// true の場合、ビルド時に親 Animator 内の Float パラメーター参照を _Smoothed に付け替える。
+        /// </summary>
         public bool replaceWithSmoothedInAnimator = true;
 
         public override void OnBuildSingle(SamirinBuildPhase buildPhase, bool beforeModularAvatar, SamirinMABaseSingle[] _MAScripts, GameObject avatarRootObject, Action<GameObject, SamirinMABaseSingle[]> invokeBuilder, Action<GameObject, SamirinMABaseSingle[]> invokeReplaceBuilder)

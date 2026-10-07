@@ -1,4 +1,5 @@
 using UnityEditor;
+using UnityEditorInternal;
 using UnityEngine;
 using Samirin33.NDMF.Base.Editor;
 using Samirin33.NDMF.Components;
@@ -9,6 +10,29 @@ namespace Samirin33.NDMF.Components.Editor
     [CanEditMultipleObjects]
     public class TuningObjectEditor : SamirinMABaseEditor
     {
+        const string ShowDeveloperSettingsPrefsKey = "Samirin33.TuningObject.ShowDeveloperSettings";
+        const string DeveloperSettingsMenuPath = "CONTEXT/TuningObject/開発者設定を隠す";
+
+        static bool ShowDeveloperSettings
+        {
+            get => EditorPrefs.GetBool(ShowDeveloperSettingsPrefsKey, false);
+            set => EditorPrefs.SetBool(ShowDeveloperSettingsPrefsKey, value);
+        }
+
+        [MenuItem(DeveloperSettingsMenuPath, false, 1000)]
+        static void ToggleDeveloperSettings()
+        {
+            ShowDeveloperSettings = !ShowDeveloperSettings;
+            InternalEditorUtility.RepaintAllViews();
+        }
+
+        [MenuItem(DeveloperSettingsMenuPath, true)]
+        static bool ToggleDeveloperSettingsValidate()
+        {
+            Menu.SetChecked(DeveloperSettingsMenuPath, ShowDeveloperSettings);
+            return true;
+        }
+
         private SerializedProperty _active;
         private SerializedProperty _previewParticles;
         private SerializedProperty _targetTransforms;
@@ -70,52 +94,74 @@ namespace Samirin33.NDMF.Components.Editor
             {
                 serializedObject.Update();
 
-                var tuning = target as TuningObject;
-                var showResetButton = tuning != null && !serializedObject.isEditingMultipleObjects;
-
-                if (showResetButton)
+                var showDeveloperSettings = ShowDeveloperSettings;
+                if (showDeveloperSettings)
                 {
-                    using (new EditorGUI.DisabledScope(!tuning.HasSnapLocalPose))
-                    {
-                        if (GUILayout.Button("最初の状態にリセット"))
-                        {
-                            serializedObject.ApplyModifiedProperties();
-                            tuning.ResetToSnapLocalPose();
-                            GUIUtility.ExitGUI();
-                        }
-                    }
+                    DrawHelpBoxWithDefaultFont(
+                        "Scene ビューに矢印・球・ボックス・カプセル・テキスト・半透明メッシュを描画するチューニング用ギズモです。\n" +
+                        "Active のとき、Target に自身の Transform と Offset を適用します。適用は初回と、自身のローカル姿勢または Offset が変わったときだけで、親の移動では Target の相対位置を維持します。\n" +
+                        "「最初の状態を更新」で現在の姿勢を基準にします。ユーザーに見えるのは「最初の状態にリセット」だけです。\n" +
+                        "ビルド時、子が無い場合はこの GameObject を削除します。",
+                        MessageType.Info);
                 }
 
-                EditorGUILayout.PropertyField(_active, new GUIContent("Active"));
-                EditorGUILayout.PropertyField(_previewParticles, new GUIContent("Preview Particles", "TuningObject 自身の選択中のみ、Target 配下の ParticleSystem をプレビューします"));
+                DrawResetButton();
 
-                DrawTargetTransforms();
-
-                EditorGUILayout.Space(8);
-                DrawSphereSection();
-                EditorGUILayout.Space(4);
-                DrawBoxSection();
-                EditorGUILayout.Space(4);
-                DrawCapsuleSection();
-                EditorGUILayout.Space(4);
-                EditorGUILayout.PropertyField(_arrows, new GUIContent("Arrows"), true);
-                EditorGUILayout.Space(4);
-                DrawLabelSection();
-                EditorGUILayout.Space(4);
-                DrawMeshSection();
-
-                if (showResetButton)
+                if (showDeveloperSettings)
                 {
-                    if (GUILayout.Button("最初の状態を更新"))
+                    EditorGUILayout.Space(6);
+                    EditorGUILayout.PropertyField(_active, new GUIContent("Active"));
+                    EditorGUILayout.PropertyField(_previewParticles, new GUIContent("Preview Particles", "TuningObject 自身の選択中のみ、Target 配下の ParticleSystem をプレビューします"));
+
+                    DrawTargetTransforms();
+
+                    EditorGUILayout.Space(8);
+                    DrawSphereSection();
+                    EditorGUILayout.Space(4);
+                    DrawBoxSection();
+                    EditorGUILayout.Space(4);
+                    DrawCapsuleSection();
+                    EditorGUILayout.Space(4);
+                    EditorGUILayout.PropertyField(_arrows, new GUIContent("Arrows"), true);
+                    EditorGUILayout.Space(4);
+                    DrawLabelSection();
+                    EditorGUILayout.Space(4);
+                    DrawMeshSection();
+
+                    var tuning = target as TuningObject;
+                    if (tuning != null && !serializedObject.isEditingMultipleObjects)
                     {
-                        serializedObject.ApplyModifiedProperties();
-                        tuning.RecordSnapLocalPose();
-                        serializedObject.Update();
+                        if (GUILayout.Button("最初の状態を更新"))
+                        {
+                            serializedObject.ApplyModifiedProperties();
+                            tuning.RecordSnapLocalPose();
+                            serializedObject.Update();
+                        }
                     }
+
+                    if (GUILayout.Button("開発者設定を隠す"))
+                        ShowDeveloperSettings = false;
                 }
 
                 serializedObject.ApplyModifiedProperties();
             });
+        }
+
+        private void DrawResetButton()
+        {
+            var tuning = target as TuningObject;
+            if (tuning == null || serializedObject.isEditingMultipleObjects)
+                return;
+
+            using (new EditorGUI.DisabledScope(!tuning.HasSnapLocalPose))
+            {
+                if (GUILayout.Button("最初の状態にリセット"))
+                {
+                    serializedObject.ApplyModifiedProperties();
+                    tuning.ResetToSnapLocalPose();
+                    GUIUtility.ExitGUI();
+                }
+            }
         }
 
         private void DrawSphereSection()
