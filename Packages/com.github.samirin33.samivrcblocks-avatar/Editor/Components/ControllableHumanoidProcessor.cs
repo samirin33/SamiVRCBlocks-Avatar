@@ -92,10 +92,13 @@ namespace Samirin33.NDMF.Components.Editor
             clonedArmature.SetParent(armatureRoot.parent, false);
             TransformMath.CopyLocalPose(armatureRoot, clonedArmature);
 
-            var boneMap = new Dictionary<Transform, Transform>(humanoidBones.Count);
-            foreach (var kvp in humanoidBones)
+            // hand.R と Little Proximal.R の間の handrole.R のように、
+            // ヒューマノイド骨の間にある非ヒューマノイドも複製しないと親子が崩れ、
+            // Parent Constraint のローカル解決がオリジナルとずれる。
+            var cloneSources = CollectCloneSources(humanoidBones, armatureRoot);
+            var boneMap = new Dictionary<Transform, Transform>(cloneSources.Count);
+            foreach (var original in cloneSources)
             {
-                var original = kvp.Key;
                 var cloned = new GameObject(original.name).transform;
                 cloned.SetParent(clonedArmature, false);
                 boneMap[original] = cloned;
@@ -238,11 +241,13 @@ namespace Samirin33.NDMF.Components.Editor
 
             // 複製側のワールド姿勢へ合わせると、スケール 100 の Armature では
             // 逆変換が軸を入れ替えて NeckChild が約 (0, -0.01, 0) に寄る。
-            // 元ボーンの子としてローカル原点に置けば、ボーンと同じ場所になる。
+            // 元ボーンの子としてローカル位置・回転だけ原点に合わせ、
+            // ビルド時のワールドスケールは親スケールが 1 でなくても維持する。
+            var parentChildWorldScale = TransformMath.GetWorldScale(parentChild);
             parentChild.SetParent(originalParent, false);
             parentChild.localPosition = Vector3.zero;
             parentChild.localRotation = Quaternion.identity;
-            parentChild.localScale = Vector3.one;
+            TransformMath.SetWorldScale(parentChild, parentChildWorldScale);
 
             var children = new List<Transform>();
             foreach (var child in humanoidBones.Keys)
@@ -290,26 +295,67 @@ namespace Samirin33.NDMF.Components.Editor
             if (IsUnder(parent, bone))
                 return;
 
+            var worldPosition = TransformMath.GetWorldPosition(bone);
+            var worldRotation = TransformMath.GetWorldRotation(bone);
+            var worldScale = TransformMath.GetWorldScale(bone);
+            var localPosition = bone.localPosition;
+            var localRotation = bone.localRotation;
+            var localScale = bone.localScale;
+            // ParentChild が自身のワールドスケールを保つと、ChildParent のスケールは
+            // 元ボーンの親とずれる。ボーン側はオリジナルのスケールへ戻す。
+            var receiver = ParentCorrectedToOriginalScale(parent, bone.name, worldScale, localScale);
+
             if (keepLocal)
             {
                 // ローカル値のコピーだと、Armature スケール 100 のモデルでは
                 // Neck→Head のような小さいローカル座標がスケール 1 の親の上で原点に潰れる。
-                var position = TransformMath.GetWorldPosition(bone);
-                var rotation = TransformMath.GetWorldRotation(bone);
-                var scale = TransformMath.GetWorldScale(bone);
-                bone.SetParent(parent, false);
-                TransformMath.SetWorldPose(bone, position, rotation, scale);
+                bone.SetParent(receiver, false);
+                TransformMath.SetWorldPose(bone, worldPosition, worldRotation, worldScale);
                 return;
             }
 
-            var localPosition = bone.localPosition;
-            var localRotation = bone.localRotation;
-            var localScale = bone.localScale;
-
             var cancel = new GameObject(bone.name + "_LocalCancel").transform;
-            cancel.SetParent(parent, false);
+            cancel.SetParent(receiver, false);
             SetInverseLocal(cancel, localPosition, localRotation, localScale);
             bone.SetParent(cancel, false);
+        }
+
+        /// <summary>
+        /// childParent のワールドスケールが付け替え前の実効親スケールと違うとき、
+        /// その差分を吸収する子を挟み、ボーンのローカルスケールがオリジナルのままになるようにする。
+        /// </summary>
+        private static Transform ParentCorrectedToOriginalScale(
+            Transform parent,
+            string boneName,
+            Vector3 boneWorldScale,
+            Vector3 boneLocalScale)
+        {
+            var originalScale = new Vector3(
+                DivideScale(boneWorldScale.x, boneLocalScale.x),
+                DivideScale(boneWorldScale.y, boneLocalScale.y),
+                DivideScale(boneWorldScale.z, boneLocalScale.z));
+            if (ScalesMatch(TransformMath.GetWorldScale(parent), originalScale))
+                return parent;
+
+            var anchor = new GameObject(boneName + "_OriginalScale").transform;
+            anchor.SetParent(parent, false);
+            anchor.localPosition = Vector3.zero;
+            anchor.localRotation = Quaternion.identity;
+            TransformMath.SetWorldScale(anchor, originalScale);
+            return anchor;
+        }
+
+        private static bool ScalesMatch(Vector3 a, Vector3 b)
+        {
+            const float tolerance = 0.0001f;
+            return Mathf.Abs(a.x - b.x) <= tolerance
+                && Mathf.Abs(a.y - b.y) <= tolerance
+                && Mathf.Abs(a.z - b.z) <= tolerance;
+        }
+
+        private static float DivideScale(float value, float divisor)
+        {
+            return Mathf.Abs(divisor) > 1e-8f ? value / divisor : value;
         }
 
         /// <summary>
@@ -377,6 +423,37 @@ namespace Samirin33.NDMF.Components.Editor
             return result;
         }
 
+        /// <summary>
+        /// ヒューマノイド骨と、Armature からそこまでの中間 Transform を複製対象にする。
+        /// </summary>
+        private static List<Transform> CollectCloneSources(
+            Dictionary<Transform, HumanBodyBones> humanoidBones,
+            Transform armatureRoot)
+        {
+            var result = new List<Transform>();
+            var seen = new HashSet<Transform>();
+            foreach (var bone in humanoidBones.Keys)
+            {
+                if (bone == null || !seen.Add(bone))
+                    continue;
+
+                result.Add(bone);
+                if (armatureRoot == null || !IsUnder(bone, armatureRoot))
+                    continue;
+
+                var current = bone.parent;
+                while (current != null && current != armatureRoot)
+                {
+                    if (!seen.Add(current))
+                        break;
+                    result.Add(current);
+                    current = current.parent;
+                }
+            }
+
+            return result;
+        }
+
         private static void PlaceCloneBone(
             Transform original,
             Transform cloned,
@@ -394,6 +471,7 @@ namespace Samirin33.NDMF.Components.Editor
                 return;
             }
 
+            // 中間ボーンも含めて直親が複製されていれば、ローカル姿勢をそのまま写す。
             if (parent != null && boneMap.TryGetValue(parent, out var clonedParentBone))
             {
                 cloned.SetParent(clonedParentBone, false);
