@@ -1,7 +1,9 @@
+using System.Collections.Generic;
 using UnityEditor;
 using UnityEditor.Animations;
 using UnityEngine;
 using nadena.dev.modular_avatar.core;
+using Samirin33.NDMF.Components;
 using VRC.SDK3.Avatars.Components;
 
 namespace Samirin33.NDMF.Components.Editor
@@ -55,10 +57,66 @@ namespace Samirin33.NDMF.Components.Editor
 
             var mergeAnimator = moduleRoot.AddComponent<ModularAvatarMergeAnimator>();
             ConfigureMergeAnimator(mergeAnimator, controller, layerPriority, matchAvatarWriteDefaults);
+            AttachDummyFix(moduleRoot, controller, parentObject);
 
             EditorUtility.SetDirty(moduleRoot);
             EditorUtility.SetDirty(mergeAnimator);
             return moduleRoot;
+        }
+
+        /// <summary>
+        /// 生成 Animator 内のダミー Bool を、統合前の FixDummyParameter でアバター側の条件に揃える。
+        /// 名前に Dummy を含む Bool と、アバター上で指定済みかつこの Animator にもある名前を対象にする。
+        /// </summary>
+        private static void AttachDummyFix(GameObject moduleRoot, AnimatorController controller, GameObject parentObject)
+        {
+            var names = new List<string>();
+            var seen = new HashSet<string>(System.StringComparer.Ordinal);
+
+            foreach (var name in FixDummyParameterProcessor.FindDummyNamedBools(controller))
+            {
+                if (seen.Add(name))
+                    names.Add(name);
+            }
+
+            var avatar = parentObject.GetComponentInParent<VRCAvatarDescriptor>(true);
+            var searchRoot = avatar != null ? avatar.gameObject : parentObject;
+            foreach (var fix in searchRoot.GetComponentsInChildren<FixDummyParameter>(true))
+            {
+                if (fix == null || fix.dummyParameterNames == null)
+                    continue;
+
+                foreach (var raw in fix.dummyParameterNames)
+                {
+                    if (string.IsNullOrWhiteSpace(raw))
+                        continue;
+
+                    var name = raw.Trim();
+                    if (!seen.Add(name) || !HasBoolParameter(controller, name))
+                        continue;
+
+                    names.Add(name);
+                }
+            }
+
+            if (names.Count == 0)
+                return;
+
+            var fixDummy = moduleRoot.AddComponent<FixDummyParameter>();
+            fixDummy.dummyParameterNames = names.ToArray();
+        }
+
+        private static bool HasBoolParameter(AnimatorController controller, string parameterName)
+        {
+            foreach (var parameter in controller.parameters)
+            {
+                if (parameter == null || parameter.type != AnimatorControllerParameterType.Bool)
+                    continue;
+                if (parameter.name == parameterName)
+                    return true;
+            }
+
+            return false;
         }
 
         private static void RemoveExistingModule(Transform parent, string moduleObjectName)

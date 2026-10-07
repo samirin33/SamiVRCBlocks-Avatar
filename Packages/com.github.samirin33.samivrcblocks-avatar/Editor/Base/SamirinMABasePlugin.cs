@@ -3,9 +3,11 @@ using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
 using nadena.dev.ndmf;
+using nadena.dev.ndmf.animator;
 using Samirin33.NDMF.Animation;
 using Samirin33.NDMF.Base;
 using Samirin33.NDMF.Base.Plugin;
+using Samirin33.NDMF.Components.Editor;
 
 [assembly: ExportsPlugin(typeof(SamirinMABasePlugin))]
 
@@ -59,6 +61,12 @@ namespace Samirin33.NDMF.Base.Plugin
             {
                 SamirinMABase[] scripts = ctx.AvatarRootObject.GetComponentsInChildren<SamirinMABase>(true);
                 InvokeOnBuild(scripts, BuildPhase.Transforming, true, ctx.AvatarRootObject);
+            });
+            // 上の OnBuild が MA Merge Animator を足したあと、統合前にダミー条件を揃える。
+            // 仮想コントローラを書き換えるので、元の Animator アセットは変更しない。
+            seq.WithRequiredExtension(typeof(AnimatorServicesContext), s =>
+            {
+                s.Run("SamirinFixDummyParameter", FixDummyParameterProcessor.Execute);
             });
 
             seq = InPhase(BuildPhase.Transforming);
