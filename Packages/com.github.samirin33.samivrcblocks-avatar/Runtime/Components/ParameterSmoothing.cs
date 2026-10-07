@@ -21,6 +21,13 @@ namespace Samirin33.NDMF.Components
             /// ResizableSyncParameters 連携時は元パラメータ名の _Smoothed を指定する。
             /// </summary>
             public string smoothedParameterName;
+            /// <summary>
+            /// true の場合、スムージングの入出力を clampMin〜clampMax にクランプする。
+            /// false の場合は 0〜1。
+            /// </summary>
+            public bool specifyClampRange;
+            public float clampMin;
+            public float clampMax = 1f;
 
             public float GetEffectiveSmoothWeight(float defaultWeight)
                 => useDefaultSmoothWeight ? defaultWeight : smoothWeight;

@@ -46,6 +46,9 @@ namespace Samirin33.NDMF.Components.Editor
                         var parameterNameProp = element.FindPropertyRelative("parameterName");
                         var useDefaultProp = element.FindPropertyRelative("useDefaultSmoothWeight");
                         var smoothWeightProp = element.FindPropertyRelative("smoothWeight");
+                        var specifyClampRangeProp = element.FindPropertyRelative("specifyClampRange");
+                        var clampMinProp = element.FindPropertyRelative("clampMin");
+                        var clampMaxProp = element.FindPropertyRelative("clampMax");
 
                         EditorGUILayout.BeginVertical(EditorStyles.helpBox, GUILayout.ExpandWidth(true));
 
@@ -96,6 +99,8 @@ namespace Samirin33.NDMF.Components.Editor
                             DrawSmoothWeightField(smoothWeightProp);
                         }
 
+                        DrawClampRangeFields(specifyClampRangeProp, clampMinProp, clampMaxProp);
+
                         var paramName = parameterNameProp.stringValue;
                         if (!string.IsNullOrEmpty(paramName))
                         {
@@ -132,6 +137,15 @@ namespace Samirin33.NDMF.Components.Editor
                         var smoothedNameProp = newElement.FindPropertyRelative("smoothedParameterName");
                         if (smoothedNameProp != null)
                             smoothedNameProp.stringValue = "";
+                        var specifyClampRangeProp = newElement.FindPropertyRelative("specifyClampRange");
+                        if (specifyClampRangeProp != null)
+                            specifyClampRangeProp.boolValue = false;
+                        var clampMinProp = newElement.FindPropertyRelative("clampMin");
+                        if (clampMinProp != null)
+                            clampMinProp.floatValue = 0f;
+                        var clampMaxProp = newElement.FindPropertyRelative("clampMax");
+                        if (clampMaxProp != null)
+                            clampMaxProp.floatValue = 1f;
                     }
                 }
                 EditorGUILayout.EndVertical();
@@ -148,6 +162,49 @@ namespace Samirin33.NDMF.Components.Editor
 
                 serializedObject.ApplyModifiedProperties();
             });
+        }
+
+        private static void DrawClampRangeFields(
+            SerializedProperty specifyClampRangeProp,
+            SerializedProperty clampMinProp,
+            SerializedProperty clampMaxProp)
+        {
+            if (specifyClampRangeProp == null || clampMinProp == null || clampMaxProp == null)
+                return;
+
+            EditorGUI.BeginChangeCheck();
+            EditorGUILayout.PropertyField(
+                specifyClampRangeProp,
+                new GUIContent("クランプ範囲を指定する", "オフのときは 0〜1 にクランプします。オンにすると、スムージングの入出力を最小〜最大の範囲に収めます。"));
+            if (EditorGUI.EndChangeCheck()
+                && specifyClampRangeProp.boolValue
+                && clampMaxProp.floatValue <= clampMinProp.floatValue)
+            {
+                clampMinProp.floatValue = 0f;
+                clampMaxProp.floatValue = 1f;
+            }
+
+            if (!specifyClampRangeProp.boolValue)
+                return;
+
+            var rect = EditorGUILayout.GetControlRect();
+            var labelWidth = EditorGUIUtility.labelWidth;
+            EditorGUI.LabelField(new Rect(rect.x, rect.y, labelWidth, rect.height), "クランプ範囲");
+
+            var gap = 4f;
+            var fieldsX = rect.x + labelWidth;
+            var half = Mathf.Max(0f, (rect.width - labelWidth - gap) * 0.5f);
+            var minRect = new Rect(fieldsX, rect.y, half, rect.height);
+            var maxRect = new Rect(fieldsX + half + gap, rect.y, half, rect.height);
+
+            var previousLabelWidth = EditorGUIUtility.labelWidth;
+            EditorGUIUtility.labelWidth = 36f;
+            clampMinProp.floatValue = EditorGUI.FloatField(minRect, "最小", clampMinProp.floatValue);
+            clampMaxProp.floatValue = EditorGUI.FloatField(maxRect, "最大", clampMaxProp.floatValue);
+            EditorGUIUtility.labelWidth = previousLabelWidth;
+
+            if (clampMinProp.floatValue >= clampMaxProp.floatValue)
+                EditorGUILayout.HelpBox("最小値は最大値より小さくしてください。", MessageType.Warning);
         }
 
         private void ManualGenerateAnimator()

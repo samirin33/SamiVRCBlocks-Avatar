@@ -141,6 +141,36 @@ namespace Samirin33.NDMF.Components.Editor
             => string.IsNullOrEmpty(info.smoothedParameterName) ? $"{info.parameterName}_Smoothed" : info.smoothedParameterName;
 
         /// <summary>
+        /// スムージングの入出力範囲。未指定時は 0〜1。最小と最大が逆転している場合は入れ替える。
+        /// </summary>
+        private static void GetClampRange(ParameterSmoothing.ParameterSmoothingInfo info, out float min, out float max)
+        {
+            if (info.specifyClampRange)
+            {
+                min = info.clampMin;
+                max = info.clampMax;
+            }
+            else
+            {
+                min = 0f;
+                max = 1f;
+            }
+
+            if (min > max)
+            {
+                var swap = min;
+                min = max;
+                max = swap;
+            }
+
+            if (Mathf.Approximately(min, max))
+            {
+                Debug.LogWarning($"[ParameterSmoothing] {info.parameterName} のクランプ範囲が無効なため、最大値を広げて生成します。");
+                max = min + 0.0001f;
+            }
+        }
+
+        /// <summary>
         /// 同じ SmoothWeight 値は同一の FixedSmoothWeight パラメーターを共有する。
         /// </summary>
         private static string GetFixedWeightParamName(float smoothWeight)
@@ -170,7 +200,10 @@ namespace Samirin33.NDMF.Components.Editor
                         parameterName = info.parameterName,
                         useDefaultSmoothWeight = false,
                         smoothWeight = info.GetEffectiveSmoothWeight(component.defaultSmoothWeight),
-                        smoothedParameterName = info.smoothedParameterName
+                        smoothedParameterName = info.smoothedParameterName,
+                        specifyClampRange = info.specifyClampRange,
+                        clampMin = info.clampMin,
+                        clampMax = info.clampMax
                     });
                 }
             }
@@ -382,12 +415,13 @@ namespace Samirin33.NDMF.Components.Editor
             var paramName = info.parameterName;
             var smoothedParamName = GetSmoothedParamName(info);
             var fixedWeightParamName = GetFixedWeightParamName(info.smoothWeight);
+            GetClampRange(info, out var clampMin, out var clampMax);
 
-            var clip0 = CreateEmbeddedParamClip(smoothedParamName, 0f, controller);
-            var clip1 = CreateEmbeddedParamClip(smoothedParamName, 1f, controller);
+            var clipMin = CreateEmbeddedParamClip(smoothedParamName, clampMin, controller);
+            var clipMax = CreateEmbeddedParamClip(smoothedParamName, clampMax, controller);
 
-            var rawTree = CreateRawBlendTree(paramName, smoothedParamName, clip0, clip1, controller);
-            var smoothedTree = CreateSmoothedBlendTree(paramName, smoothedParamName, clip0, clip1, controller);
+            var rawTree = CreateRawBlendTree(paramName, clipMin, clipMax, clampMin, clampMax, controller);
+            var smoothedTree = CreateSmoothedBlendTree(paramName, smoothedParamName, clipMin, clipMax, clampMin, clampMax, controller);
 
             var tree = new BlendTree
             {
@@ -404,40 +438,64 @@ namespace Samirin33.NDMF.Components.Editor
             return tree;
         }
 
-        private static BlendTree CreateRawBlendTree(string paramName, string smoothedParamName,
-            Motion clip0, Motion clip1, AnimatorController controller)
+        private static BlendTree CreateRawBlendTree(string paramName,
+            Motion clipMin, Motion clipMax, float clampMin, float clampMax, AnimatorController controller)
         {
             var tree = new BlendTree
             {
                 name = "Raw",
                 blendType = BlendTreeType.Simple1D,
                 blendParameter = paramName,
-                useAutomaticThresholds = true,
-                minThreshold = 0f,
-                maxThreshold = 1f
+                useAutomaticThresholds = false,
+                minThreshold = clampMin,
+                maxThreshold = clampMax
             };
             AssetDatabase.AddObjectToAsset(tree, controller);
-            tree.AddChild(clip0, 0f);
-            tree.AddChild(clip1, 1f);
+            tree.AddChild(clipMin, clampMin);
+            tree.AddChild(clipMax, clampMax);
+            SetSimple1DThresholds(tree, clampMin, clampMax);
             return tree;
         }
 
         private static BlendTree CreateSmoothedBlendTree(string paramName, string smoothedParamName,
-            Motion clip0, Motion clip1, AnimatorController controller)
+            Motion clipMin, Motion clipMax, float clampMin, float clampMax, AnimatorController controller)
         {
             var tree = new BlendTree
             {
                 name = "Smoothed",
                 blendType = BlendTreeType.Simple1D,
                 blendParameter = smoothedParamName,
-                useAutomaticThresholds = true,
-                minThreshold = 0f,
-                maxThreshold = 1f
+                useAutomaticThresholds = false,
+                minThreshold = clampMin,
+                maxThreshold = clampMax
             };
             AssetDatabase.AddObjectToAsset(tree, controller);
-            tree.AddChild(clip0, 0f);
-            tree.AddChild(clip1, 1f);
+            tree.AddChild(clipMin, clampMin);
+            tree.AddChild(clipMax, clampMax);
+            SetSimple1DThresholds(tree, clampMin, clampMax);
             return tree;
+        }
+
+        private static void SetSimple1DThresholds(BlendTree tree, float min, float max)
+        {
+            var so = new SerializedObject(tree);
+            var autoProp = so.FindProperty("m_UseAutomaticThresholds");
+            if (autoProp != null) autoProp.boolValue = false;
+            var minProp = so.FindProperty("m_MinThreshold");
+            if (minProp != null) minProp.floatValue = min;
+            var maxProp = so.FindProperty("m_MaxThreshold");
+            if (maxProp != null) maxProp.floatValue = max;
+
+            var childrenProp = so.FindProperty("m_Childs");
+            if (childrenProp != null && childrenProp.arraySize >= 2)
+            {
+                var minThresholdProp = childrenProp.GetArrayElementAtIndex(0).FindPropertyRelative("m_Threshold");
+                if (minThresholdProp != null) minThresholdProp.floatValue = min;
+                var maxThresholdProp = childrenProp.GetArrayElementAtIndex(1).FindPropertyRelative("m_Threshold");
+                if (maxThresholdProp != null) maxThresholdProp.floatValue = max;
+            }
+
+            so.ApplyModifiedPropertiesWithoutUndo();
         }
 
         private static void SetDirectBlendTreeChildrenParameter(BlendTree blendTree, string parameterName)
