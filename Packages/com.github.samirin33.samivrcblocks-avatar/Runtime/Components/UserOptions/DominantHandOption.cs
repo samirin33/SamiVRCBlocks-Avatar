@@ -94,6 +94,12 @@ namespace Samirin33.NDMF.Components
         [Tooltip("利き手ごとに適用する Bone Proxy / Transform の指定")]
         public List<Entry> entries = new List<Entry>();
 
+        public DominantHandOption()
+        {
+            // FixHandVector（default 100）は同じ Resolving / MA 前に自身を削除するため、それより先に適用する。
+            priority = 90;
+        }
+
         public override void OnBuild(SamirinBuildPhase buildPhase, bool beforeModularAvatar, GameObject avatarRootObject)
         {
             if (buildPhase != SamirinBuildPhase.Resolving || !beforeModularAvatar)

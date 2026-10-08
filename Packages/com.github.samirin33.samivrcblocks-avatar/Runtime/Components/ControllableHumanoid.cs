@@ -23,6 +23,12 @@ namespace Samirin33.NDMF.Components
         /// <summary>Editor から登録される FX パス書き換え処理。</summary>
         public static Action<ControllableHumanoid, GameObject> RemapFxHandler;
 
+        /// <summary>
+        /// Editor から登録される、後段ツール（VRCFury Cross Eye Fix 等）が
+        /// 元ボーンの親子を変えた箇所の追従基準を戻す処理。
+        /// </summary>
+        public static Action<ControllableHumanoid, GameObject> RestoreFollowSpaceHandler;
+
         [Serializable]
         public class BoneLinkEntry
         {
@@ -185,6 +191,15 @@ namespace Samirin33.NDMF.Components
         {
             public HumanBodyBones bone;
             public Behaviour constraint;
+
+            /// <summary>ローカル解決の基準になる、複製時点の元ボーンの親。</summary>
+            public Transform parent;
+
+            /// <summary>追従元の複製ボーン。</summary>
+            public Transform source;
+
+            /// <summary>分割直後の元ボーンのパス。</summary>
+            public string path;
         }
 
         /// <summary>
@@ -220,8 +235,11 @@ namespace Samirin33.NDMF.Components
         {
             // パス書き換えは分割直後に済んでいる。ここでは以降に追加された Animator の
             // ControllableHumanoid 向けカーブだけを展開する。
+            // VRCFury は NDMF の Transforming と Optimizing の間に走るため、
+            // Cross Eye Fix による目の付け替えはここで初めて見える。
             if (buildPhase == SamirinBuildPhase.Optimizing && beforeModularAvatar)
             {
+                RestoreFollowSpaceHandler?.Invoke(this, avatarRootObject);
                 RemapFxHandler?.Invoke(this, avatarRootObject);
                 DestroyImmediate(this);
                 return;

@@ -20,6 +20,7 @@ namespace Samirin33.NDMF.Components.Editor
         {
             ControllableHumanoid.BuildHandler = Build;
             ControllableHumanoid.RemapFxHandler = RemapFxLayerPaths;
+            ControllableHumanoid.RestoreFollowSpaceHandler = RestoreFollowSpaces;
         }
 
         #region Build
@@ -120,6 +121,8 @@ namespace Samirin33.NDMF.Components.Editor
                 placed.Add(original);
             }
 
+            WarnIfCloneLocalPoseDiffers(component, boneMap, armatureRoot, clonedArmature, avatarRoot);
+
             var originalArmature = new GameObject(ControllableHumanoid.OriginalArmatureName).transform;
             originalArmature.SetParent(avatarRoot, false);
             originalArmature.localPosition = Vector3.zero;
@@ -160,6 +163,9 @@ namespace Samirin33.NDMF.Components.Editor
                 {
                     bone = bodyBone,
                     constraint = follow,
+                    parent = kvp.Key.parent,
+                    source = kvp.Value,
+                    path = AnimationUtility.CalculateTransformPath(kvp.Key, avatarRoot),
                 });
             }
 
@@ -493,6 +499,55 @@ namespace Samirin33.NDMF.Components.Editor
             }
         }
 
+        /// <summary>
+        /// 追従 Parent Constraint はローカル空間で解決するため、
+        /// 複製ボーンの親対応とローカル姿勢がオリジナルと一致している必要がある。
+        /// </summary>
+        private static void WarnIfCloneLocalPoseDiffers(
+            ControllableHumanoid component,
+            Dictionary<Transform, Transform> boneMap,
+            Transform armatureRoot,
+            Transform clonedArmature,
+            Transform avatarRoot)
+        {
+            var mismatches = new List<string>();
+            foreach (var kvp in boneMap)
+            {
+                var original = kvp.Key;
+                var cloned = kvp.Value;
+                if (original == null || cloned == null)
+                    continue;
+
+                Transform expectedParent = null;
+                if (original.parent == armatureRoot)
+                    expectedParent = clonedArmature;
+                else if (original.parent != null)
+                    boneMap.TryGetValue(original.parent, out expectedParent);
+
+                if (cloned.parent == expectedParent && LocalPoseMatches(original, cloned))
+                    continue;
+
+                mismatches.Add(AnimationUtility.CalculateTransformPath(original, avatarRoot));
+            }
+
+            if (mismatches.Count == 0)
+                return;
+
+            Debug.LogWarning(
+                "[ControllableHumanoid] 複製ボーンの親子関係またはローカル座標がオリジナルと一致しません。" +
+                "ローカル解決の追従がずれる可能性があります。\n" + string.Join("\n", mismatches),
+                component);
+        }
+
+        private static bool LocalPoseMatches(Transform a, Transform b)
+        {
+            const float positionTolerance = 1e-5f;
+            const float angleTolerance = 0.01f;
+            return (a.localPosition - b.localPosition).sqrMagnitude <= positionTolerance * positionTolerance
+                && Quaternion.Angle(a.localRotation, b.localRotation) <= angleTolerance
+                && ScalesMatch(a.localScale, b.localScale);
+        }
+
         private static bool IsCloneParentReady(
             Transform original,
             Transform armatureRoot,
@@ -678,34 +733,102 @@ namespace Samirin33.NDMF.Components.Editor
             if (!component.PathRemapsApplied
                 && component.PendingPathRemaps != null
                 && component.PendingPathRemaps.Count > 0)
-            {
-                var controllers = VRCAvatarDescriptorControllerUtility.GetControllers(
-                    avatarRootObject,
-                    VRCAvatarDescriptor.AnimLayerType.Base,
-                    VRCAvatarDescriptor.AnimLayerType.Additive,
-                    VRCAvatarDescriptor.AnimLayerType.Gesture,
-                    VRCAvatarDescriptor.AnimLayerType.Action,
-                    VRCAvatarDescriptor.AnimLayerType.FX);
-
-                // 複数レイヤーで共有されたクリップへ二重に適用しない。
-                var clips = new HashSet<AnimationClip>();
-                var playAudios = new HashSet<VRCAnimatorPlayAudio>();
-                foreach (var controller in controllers)
-                {
-                    clips.UnionWith(CollectReferencedClips(controller));
-                    foreach (var layer in controller.layers)
-                        CollectPlayAudios(layer.stateMachine, playAudios);
-                }
-
-                foreach (var clip in clips)
-                    RemapClipPaths(clip, component.PendingPathRemaps);
-                foreach (var playAudio in playAudios)
-                    RemapPlayAudioPath(playAudio, component.PendingPathRemaps);
-            }
+                ApplyPathRemaps(avatarRootObject, component.PendingPathRemaps);
 
             component.PathRemapsApplied = true;
 
             ExpandConstraintToggleAnimations(component, avatarRootObject);
+        }
+
+        private static void ApplyPathRemaps(GameObject avatarRootObject, List<ControllableHumanoid.PathRemapEntry> remaps)
+        {
+            var controllers = VRCAvatarDescriptorControllerUtility.GetControllers(
+                avatarRootObject,
+                VRCAvatarDescriptor.AnimLayerType.Base,
+                VRCAvatarDescriptor.AnimLayerType.Additive,
+                VRCAvatarDescriptor.AnimLayerType.Gesture,
+                VRCAvatarDescriptor.AnimLayerType.Action,
+                VRCAvatarDescriptor.AnimLayerType.FX);
+
+            // 複数レイヤーで共有されたクリップへ二重に適用しない。
+            var clips = new HashSet<AnimationClip>();
+            var playAudios = new HashSet<VRCAnimatorPlayAudio>();
+            foreach (var controller in controllers)
+            {
+                clips.UnionWith(CollectReferencedClips(controller));
+                foreach (var layer in controller.layers)
+                    CollectPlayAudios(layer.stateMachine, playAudios);
+            }
+
+            foreach (var clip in clips)
+                RemapClipPaths(clip, remaps);
+            foreach (var playAudio in playAudios)
+                RemapPlayAudioPath(playAudio, remaps);
+        }
+
+        /// <summary>
+        /// 分割後に元ボーンと複製時の親の間へ Transform が挟まれていたら
+        /// （VRCFury Cross Eye Fix の Eye.Up 等）、その下に複製時の親と同じ姿勢の空間を置き、
+        /// ローカル解決の基準を複製側の親と揃え直す。
+        /// </summary>
+        public static void RestoreFollowSpaces(ControllableHumanoid component, GameObject avatarRootObject)
+        {
+            if (component == null || avatarRootObject == null || component.BoneApplyConstraints == null)
+                return;
+
+            var avatarRoot = avatarRootObject.transform;
+            var remaps = new List<ControllableHumanoid.PathRemapEntry>();
+            foreach (var entry in component.BoneApplyConstraints)
+            {
+                if (entry.constraint == null || entry.parent == null || entry.source == null)
+                    continue;
+
+                var bone = entry.constraint.transform;
+                if (bone.parent == entry.parent)
+                    continue;
+
+                if (!IsUnder(bone, entry.parent))
+                {
+                    Debug.LogWarning(
+                        $"[ControllableHumanoid] {bone.name} が複製時の親 {entry.parent.name} の外へ移動されたため、" +
+                        "ローカル解決の追従を補正できません。",
+                        component);
+                    continue;
+                }
+
+                var movedPath = AnimationUtility.CalculateTransformPath(bone, avatarRoot);
+
+                var space = new GameObject(bone.name + "_FollowSpace").transform;
+                space.SetParent(bone.parent, false);
+                TransformMath.CopyWorldPose(entry.parent, space);
+                bone.SetParent(space, false);
+                // ビルド中に Constraint が評価済みだと現在のワールド姿勢はずれているので、追従元のローカル値を正とする。
+                TransformMath.CopyLocalPose(entry.source, bone);
+
+                var newPath = AnimationUtility.CalculateTransformPath(bone, avatarRoot);
+                AddRemap(remaps, movedPath, newPath);
+                AddRemap(remaps, entry.path, newPath);
+            }
+
+            if (remaps.Count == 0)
+                return;
+
+            remaps.Sort((a, b) => b.oldPath.Length.CompareTo(a.oldPath.Length));
+            ApplyPathRemaps(avatarRootObject, remaps);
+        }
+
+        private static void AddRemap(List<ControllableHumanoid.PathRemapEntry> remaps, string oldPath, string newPath)
+        {
+            if (string.IsNullOrEmpty(oldPath) || oldPath == newPath)
+                return;
+            if (remaps.Exists(r => r.oldPath == oldPath))
+                return;
+
+            remaps.Add(new ControllableHumanoid.PathRemapEntry
+            {
+                oldPath = oldPath,
+                newPath = newPath,
+            });
         }
 
         private struct ConstraintToggleBinding
