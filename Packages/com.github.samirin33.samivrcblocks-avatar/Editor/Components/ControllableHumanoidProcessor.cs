@@ -190,6 +190,7 @@ namespace Samirin33.NDMF.Components.Editor
 
             remaps.Sort((a, b) => b.oldPath.Length.CompareTo(a.oldPath.Length));
             component.PendingPathRemaps = remaps;
+            component.PathRemapsApplied = false;
             component.SourceApplyConstraints = sourceConstraints;
             component.BoneApplyConstraints = boneApplyConstraints;
 
@@ -674,7 +675,9 @@ namespace Samirin33.NDMF.Components.Editor
             if (component == null || avatarRootObject == null)
                 return;
 
-            if (component.PendingPathRemaps != null && component.PendingPathRemaps.Count > 0)
+            if (!component.PathRemapsApplied
+                && component.PendingPathRemaps != null
+                && component.PendingPathRemaps.Count > 0)
             {
                 var controllers = VRCAvatarDescriptorControllerUtility.GetControllers(
                     avatarRootObject,
@@ -683,9 +686,24 @@ namespace Samirin33.NDMF.Components.Editor
                     VRCAvatarDescriptor.AnimLayerType.Gesture,
                     VRCAvatarDescriptor.AnimLayerType.Action,
                     VRCAvatarDescriptor.AnimLayerType.FX);
+
+                // 複数レイヤーで共有されたクリップへ二重に適用しない。
+                var clips = new HashSet<AnimationClip>();
+                var playAudios = new HashSet<VRCAnimatorPlayAudio>();
                 foreach (var controller in controllers)
-                    RemapControllerPaths(controller, component.PendingPathRemaps);
+                {
+                    clips.UnionWith(CollectReferencedClips(controller));
+                    foreach (var layer in controller.layers)
+                        CollectPlayAudios(layer.stateMachine, playAudios);
+                }
+
+                foreach (var clip in clips)
+                    RemapClipPaths(clip, component.PendingPathRemaps);
+                foreach (var playAudio in playAudios)
+                    RemapPlayAudioPath(playAudio, component.PendingPathRemaps);
             }
+
+            component.PathRemapsApplied = true;
 
             ExpandConstraintToggleAnimations(component, avatarRootObject);
         }
@@ -876,18 +894,6 @@ namespace Samirin33.NDMF.Components.Editor
                 EditorUtility.SetDirty(clip);
         }
 
-        private static void RemapControllerPaths(
-            AnimatorController controller,
-            List<ControllableHumanoid.PathRemapEntry> remaps)
-        {
-            if (controller == null || remaps == null || remaps.Count == 0)
-                return;
-
-            var clips = CollectReferencedClips(controller);
-            foreach (var clip in clips)
-                RemapClipPaths(clip, remaps);
-        }
-
         private static HashSet<AnimationClip> CollectReferencedClips(AnimatorController controller)
         {
             var set = new HashSet<AnimationClip>();
@@ -968,6 +974,45 @@ namespace Samirin33.NDMF.Components.Editor
             }
 
             EditorUtility.SetDirty(clip);
+        }
+
+        private static void CollectPlayAudios(AnimatorStateMachine stateMachine, HashSet<VRCAnimatorPlayAudio> set)
+        {
+            if (stateMachine == null)
+                return;
+
+            foreach (var behaviour in stateMachine.behaviours)
+            {
+                if (behaviour is VRCAnimatorPlayAudio playAudio)
+                    set.Add(playAudio);
+            }
+
+            foreach (var child in stateMachine.states)
+            {
+                if (child.state == null)
+                    continue;
+                foreach (var behaviour in child.state.behaviours)
+                {
+                    if (behaviour is VRCAnimatorPlayAudio playAudio)
+                        set.Add(playAudio);
+                }
+            }
+
+            foreach (var childSm in stateMachine.stateMachines)
+                CollectPlayAudios(childSm.stateMachine, set);
+        }
+
+        private static void RemapPlayAudioPath(VRCAnimatorPlayAudio playAudio, List<ControllableHumanoid.PathRemapEntry> remaps)
+        {
+            if (playAudio == null)
+                return;
+
+            var newPath = RemapPath(playAudio.SourcePath, remaps);
+            if (newPath == playAudio.SourcePath)
+                return;
+
+            playAudio.SourcePath = newPath;
+            EditorUtility.SetDirty(playAudio);
         }
 
         private static string RemapPath(string path, List<ControllableHumanoid.PathRemapEntry> remaps)

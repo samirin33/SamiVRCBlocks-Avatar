@@ -3,7 +3,6 @@ using System.Linq;
 using nadena.dev.modular_avatar.core;
 using nadena.dev.ndmf;
 using nadena.dev.ndmf.animator;
-using Samirin33.NDMF.Components;
 using UnityEngine;
 using VRC.SDK3.Avatars.Components;
 using NdmfRuntimeUtil = nadena.dev.ndmf.runtime.RuntimeUtil;
@@ -11,30 +10,20 @@ using NdmfRuntimeUtil = nadena.dev.ndmf.runtime.RuntimeUtil;
 namespace Samirin33.NDMF.Animation
 {
     /// <summary>
-    /// VRCAnimatorPlayAudio.SourcePath を、Bone Proxy の改名と OriginalArmature への移動が終わった階層へ合わせる。
-    /// 他の Bone Proxy と同じ骨へ付くと Head は Head (1) のように番号が付く。
-    /// その AudioSource は付け替え先のボーンと一緒に OriginalArmature 以下へ移る。
+    /// Bone Proxy の付け替え先を想定して書かれた VRCAnimatorPlayAudio.SourcePath を、
+    /// MA 処理前に Bone Proxy 配下の実在する AudioSource のパスへ置き換える。
+    /// 以降の Bone Proxy の移動や Head (1) のような改名は NDMF のパス追跡で反映される。
+    /// Behaviour のインスタンスは他プラグインの複製で入れ替わるため、保持しない。
     /// </summary>
     internal static class BoneProxyPlayAudioPathFix
     {
-        sealed class Pending
-        {
-            public VRCAnimatorPlayAudio PlayAudio;
-            public Transform Target;
-            public string AuthoredPath;
-        }
-
-        static readonly List<Pending> PendingBindings = new List<Pending>();
-
         public static void Execute(BuildContext context)
         {
-            PendingBindings.Clear();
-
             var root = context.AvatarRootTransform;
             if (root.GetComponentInChildren<ModularAvatarBoneProxy>(true) == null)
                 return;
 
-            var asc = context.ActivateExtensionContextRecursive<AnimatorServicesContext>();
+            var asc = context.Extension<AnimatorServicesContext>();
             var remapper = asc.ObjectPathRemapper;
             var indexed = IndexPaths(root);
             var seen = new HashSet<int>();
@@ -60,60 +49,13 @@ namespace Samirin33.NDMF.Animation
                         if (playAudio == null || !seen.Add(playAudio.GetInstanceID()))
                             continue;
 
-                        TryCapture(remapper, indexed, playAudio);
+                        ResolveSourcePath(remapper, indexed, playAudio);
                     }
                 }
             }
         }
 
-        /// <summary>
-        /// Bone Proxy の番号付き改名と、ControllableHumanoid の OriginalArmature 移動の後に呼ぶ。
-        /// </summary>
-        public static void ApplyResolvedPaths(BuildContext context)
-        {
-            var root = context.AvatarRootTransform;
-            try
-            {
-                foreach (var pending in PendingBindings)
-                {
-                    if (pending.PlayAudio == null)
-                        continue;
-
-                    var target = pending.Target;
-                    if (target == null && !TryFindResolvedTarget(root, pending.AuthoredPath, out target))
-                    {
-                        Debug.LogWarning(
-                            "[SamiVRCBlocks] VRC Audio Player のパス \"" + pending.AuthoredPath +
-                            "\" に対応する AudioSource が OriginalArmature 以下に見つかりません。");
-                        continue;
-                    }
-
-                    var resolvedPath = NdmfRuntimeUtil.RelativePath(root, target);
-                    if (string.IsNullOrEmpty(resolvedPath))
-                    {
-                        Debug.LogWarning(
-                            "[SamiVRCBlocks] VRC Audio Player の対象 \"" + target.name +
-                            "\" がアバター配下にないためパスを更新できません。");
-                        continue;
-                    }
-
-                    if (pending.PlayAudio.SourcePath == resolvedPath)
-                        continue;
-
-                    var authoredPath = pending.PlayAudio.SourcePath;
-                    pending.PlayAudio.SourcePath = resolvedPath;
-                    Debug.Log(
-                        "[SamiVRCBlocks] VRC Audio Player のパスを付け替え後の位置へ更新しました: \"" +
-                        authoredPath + "\" -> \"" + resolvedPath + "\"");
-                }
-            }
-            finally
-            {
-                PendingBindings.Clear();
-            }
-        }
-
-        static void TryCapture(
+        static void ResolveSourcePath(
             ObjectPathRemapper remapper,
             List<(string path, Transform transform)> indexed,
             VRCAnimatorPlayAudio playAudio)
@@ -122,20 +64,8 @@ namespace Samirin33.NDMF.Animation
             if (string.IsNullOrEmpty(sourcePath))
                 return;
 
-            var resolved = remapper.GetObjectForPath(sourcePath);
-            if (resolved != null)
-            {
-                if (!IsUnderBoneProxy(resolved.transform))
-                    return;
-
-                PendingBindings.Add(new Pending
-                {
-                    PlayAudio = playAudio,
-                    Target = resolved.transform,
-                    AuthoredPath = sourcePath,
-                });
+            if (remapper.GetObjectForPath(sourcePath) != null)
                 return;
-            }
 
             if (!TryFindBoneProxyTarget(indexed, sourcePath, out var target, out var ambiguous))
             {
@@ -149,45 +79,11 @@ namespace Samirin33.NDMF.Animation
                 return;
             }
 
-            PendingBindings.Add(new Pending
-            {
-                PlayAudio = playAudio,
-                Target = target,
-                AuthoredPath = sourcePath,
-            });
-        }
-
-        static bool TryFindResolvedTarget(Transform root, string authoredPath, out Transform target)
-        {
-            target = null;
-            if (string.IsNullOrEmpty(authoredPath))
-                return false;
-
-            var indexed = IndexPaths(root);
-            var matches = FindSuffixMatches(indexed, authoredPath);
-            if (matches.Count == 0)
-                return false;
-
-            var underOriginal = matches
-                .Where(match => IsUnderNamedRoot(match.path, ControllableHumanoid.OriginalArmatureName))
-                .ToList();
-            if (underOriginal.Count > 0)
-                matches = underOriginal;
-
-            var withAudio = matches.Where(match => match.transform.GetComponent<AudioSource>() != null).ToList();
-            if (withAudio.Count == 1)
-            {
-                target = withAudio[0].transform;
-                return true;
-            }
-
-            if (matches.Count == 1)
-            {
-                target = matches[0].transform;
-                return true;
-            }
-
-            return false;
+            var resolvedPath = remapper.GetVirtualPathForObject(target);
+            playAudio.SourcePath = resolvedPath;
+            Debug.Log(
+                "[SamiVRCBlocks] VRC Audio Player のパスを MA Bone Proxy 配下の AudioSource へ合わせました: \"" +
+                sourcePath + "\" -> \"" + resolvedPath + "\"");
         }
 
         static bool TryFindBoneProxyTarget(
@@ -264,11 +160,6 @@ namespace Samirin33.NDMF.Animation
 
             var number = actual.Substring(authored.Length + 2, actual.Length - authored.Length - 3);
             return int.TryParse(number, out _);
-        }
-
-        static bool IsUnderNamedRoot(string path, string rootName)
-        {
-            return path == rootName || path.StartsWith(rootName + "/", System.StringComparison.Ordinal);
         }
 
         static List<(string path, Transform transform)> IndexPaths(Transform root)

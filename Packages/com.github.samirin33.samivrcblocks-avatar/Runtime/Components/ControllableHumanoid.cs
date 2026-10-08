@@ -188,10 +188,18 @@ namespace Samirin33.NDMF.Components
         }
 
         /// <summary>
-        /// Generating で記録した旧パス→新パス。Optimizing での FX 再書き換えに使う。
+        /// Armature 分割で記録した旧パス→新パス。
         /// </summary>
         [NonSerialized]
         public List<PathRemapEntry> PendingPathRemaps;
+
+        /// <summary>
+        /// PendingPathRemaps を Animator へ適用済みか。
+        /// 複製 Armature は元と同じパスに置かれるため、再適用すると
+        /// 複製ボーン下へ移したオブジェクトのパスが OriginalArmature 側へずれる。
+        /// </summary>
+        [NonSerialized]
+        public bool PathRemapsApplied;
 
         [NonSerialized]
         public List<Behaviour> SourceApplyConstraints;
@@ -210,7 +218,8 @@ namespace Samirin33.NDMF.Components
 
         public override void OnBuild(SamirinBuildPhase buildPhase, bool beforeModularAvatar, GameObject avatarRootObject)
         {
-            // パス書き換えは MA のアニメータ結合後に行う。
+            // パス書き換えは分割直後に済んでいる。ここでは以降に追加された Animator の
+            // ControllableHumanoid 向けカーブだけを展開する。
             if (buildPhase == SamirinBuildPhase.Optimizing && beforeModularAvatar)
             {
                 RemapFxHandler?.Invoke(this, avatarRootObject);
