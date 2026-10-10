@@ -7,6 +7,7 @@ using nadena.dev.ndmf.animator;
 using Samirin33.NDMF.Animation;
 using Samirin33.NDMF.Base;
 using Samirin33.NDMF.Base.Plugin;
+using Samirin33.NDMF.Components;
 using Samirin33.NDMF.Components.Editor;
 
 [assembly: ExportsPlugin(typeof(SamirinMABasePlugin))]
@@ -69,6 +70,13 @@ namespace Samirin33.NDMF.Base.Plugin
                 s.Run("SamirinResolveBoneProxyPlayAudio", BoneProxyPlayAudioPathFix.Execute);
             });
 
+            // Floor Adjuster は late-transform-stages で Hips を動かした直後に MA コンポーネントごと消えるため、
+            // 補正量は適用前の Hips 位置との差分で求める。
+            seq = InPhase(BuildPhase.Transforming);
+            seq.AfterPlugin("nadena.dev.modular-avatar");
+            seq.BeforePlugin("nadena.dev.modular-avatar.late-transform-stages");
+            seq.Run("SamirinCaptureFloorAdjust", ctx => FloorAdjustmentTracker.CaptureBeforeAdjust(ctx.AvatarRootObject));
+
             seq = InPhase(BuildPhase.Transforming);
             seq.AfterPlugin("nadena.dev.modular-avatar");
             // メインプラグイン後の再バインド（late-transform-stages）より後。
@@ -76,6 +84,8 @@ namespace Samirin33.NDMF.Base.Plugin
             seq.AfterPlugin("nadena.dev.modular-avatar.late-transform-stages");
             seq.Run("SamirinTransformingAfterMA", ctx =>
             {
+                FloorAdjustmentTracker.ResolveAfterAdjust(ctx.AvatarRootObject);
+
                 SamirinMABase[] scripts = ctx.AvatarRootObject.GetComponentsInChildren<SamirinMABase>(true);
                 InvokeOnBuild(scripts, BuildPhase.Transforming, false, ctx.AvatarRootObject);
             });

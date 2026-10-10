@@ -69,21 +69,21 @@ namespace Samirin33.NDMF.Animation
 
             if (!TryFindBoneProxyTarget(indexed, sourcePath, out var target, out var ambiguous))
             {
-                if (ambiguous)
-                {
-                    Debug.LogWarning(
-                        "[SamiVRCBlocks] VRC Audio Player のパス \"" + sourcePath +
-                        "\" は解決できず、MA Bone Proxy 配下の候補も一意ではないため書き換えをスキップしました。");
-                }
+                // if (ambiguous)
+                // {
+                //     Debug.LogWarning(
+                //         "[SamiVRCBlocks] VRC Audio Player のパス \"" + sourcePath +
+                //         "\" は解決できず、MA Bone Proxy 配下の候補も一意ではないため書き換えをスキップしました。");
+                // }
 
                 return;
             }
 
             var resolvedPath = remapper.GetVirtualPathForObject(target);
             playAudio.SourcePath = resolvedPath;
-            Debug.Log(
-                "[SamiVRCBlocks] VRC Audio Player のパスを MA Bone Proxy 配下の AudioSource へ合わせました: \"" +
-                sourcePath + "\" -> \"" + resolvedPath + "\"");
+            // Debug.Log(
+            //     "[SamiVRCBlocks] VRC Audio Player のパスを MA Bone Proxy 配下の AudioSource へ合わせました: \"" +
+            //     sourcePath + "\" -> \"" + resolvedPath + "\"");
         }
 
         static bool TryFindBoneProxyTarget(

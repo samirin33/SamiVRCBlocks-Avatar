@@ -122,6 +122,7 @@ namespace Samirin33.NDMF.Components
         private struct SourceCapture
         {
             public bool valid;
+            public Transform source;
             public Vector3 worldPosition;
             public Quaternion worldRotation;
             public Vector3 worldScale;
@@ -200,6 +201,7 @@ namespace Samirin33.NDMF.Components
                 _capturedSources[i] = new SourceCapture
                 {
                     valid = true,
+                    source = source,
                     worldPosition = TransformMath.GetWorldPosition(source),
                     worldRotation = TransformMath.GetWorldRotation(source),
                     worldScale = TransformMath.GetWorldScale(source),
@@ -215,12 +217,37 @@ namespace Samirin33.NDMF.Components
             if (sources == null || sources.Length == 0)
                 return;
 
+            if (avatarRootObject != null)
+                CorrectCapturesForFloorAdjust(avatarRootObject);
+
             var animator = FindHumanoidAnimator();
             ApplyTo(ResolvedTarget, animator);
 
             // HipPos のように適用先が別オブジェクトでも、コンポーネント自身（ギミック階層）も合わせる。
             if (target != null && target != transform)
                 ApplyTo(transform, animator);
+        }
+
+        /// <summary>
+        /// ソースは Floor Adjuster より前に記録しているため、その後に下がった分を位置へ反映する。
+        /// </summary>
+        private void CorrectCapturesForFloorAdjust(GameObject avatarRootObject)
+        {
+            if (_capturedSources == null)
+                return;
+
+            for (var i = 0; i < _capturedSources.Length; i++)
+            {
+                var capture = _capturedSources[i];
+                if (!capture.valid)
+                    continue;
+
+                capture.worldPosition = FloorAdjustmentTracker.CorrectWorldPosition(
+                    avatarRootObject, capture.source, capture.worldPosition);
+                capture.localPosition = FloorAdjustmentTracker.CorrectLocalPosition(
+                    avatarRootObject, capture.source, capture.localPosition);
+                _capturedSources[i] = capture;
+            }
         }
 
         private void ApplyTo(Transform t, Animator animator)
