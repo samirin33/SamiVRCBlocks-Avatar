@@ -202,28 +202,12 @@ namespace Samirin33.NDMF.Components
             public string path;
         }
 
-        /// <summary>
-        /// Armature 分割で記録した旧パス→新パス。
-        /// </summary>
-        [NonSerialized]
-        public List<PathRemapEntry> PendingPathRemaps;
-
-        /// <summary>
-        /// PendingPathRemaps を Animator へ適用済みか。
-        /// 複製 Armature は元と同じパスに置かれるため、再適用すると
-        /// 複製ボーン下へ移したオブジェクトのパスが OriginalArmature 側へずれる。
-        /// </summary>
-        [NonSerialized]
-        public bool PathRemapsApplied;
-
         [NonSerialized]
         public List<Behaviour> SourceApplyConstraints;
 
-        [Serializable]
-        public struct PathRemapEntry
+        private void ReportWarning(string message)
         {
-            public string oldPath;
-            public string newPath;
+            SamirinRuntimeReport.Warning(message, this);
         }
 
         public ControllableHumanoid()
@@ -233,8 +217,8 @@ namespace Samirin33.NDMF.Components
 
         public override void OnBuild(SamirinBuildPhase buildPhase, bool beforeModularAvatar, GameObject avatarRootObject)
         {
-            // パス書き換えは分割直後に済んでいる。ここでは以降に追加された Animator の
-            // ControllableHumanoid 向けカーブだけを展開する。
+            // パス書き換えは分割直後に済んでいる（NDMF の ObjectPathRemapper）。ここでは以降に追加された
+            // Animator の ControllableHumanoid 向けカーブだけを展開する。
             // VRCFury は NDMF の Transforming と Optimizing の間に走るため、
             // Cross Eye Fix による目の付け替えはここで初めて見える。
             if (buildPhase == SamirinBuildPhase.Optimizing && beforeModularAvatar)
@@ -257,16 +241,14 @@ namespace Samirin33.NDMF.Components
             {
                 if (all[0] == this)
                 {
-                    Debug.LogWarning(
+                    ReportWarning(
                         "[ControllableHumanoid] 1つのアバターに複数の ControllableHumanoid は同時に導入できません。" +
-                        "ヒューマノイドの複製とパス書き換えが衝突するため、最初のコンポーネントのみ処理し、残りは無視します。",
-                        this);
+                        "ヒューマノイドの複製とパス書き換えが衝突するため、最初のコンポーネントのみ処理し、残りは無視します。");
                 }
                 else
                 {
-                    Debug.LogWarning(
-                        "[ControllableHumanoid] 1つのアバターに複数の ControllableHumanoid は同時に導入できません。このコンポーネントは無視されます。",
-                        this);
+                    ReportWarning(
+                        "[ControllableHumanoid] 1つのアバターに複数の ControllableHumanoid は同時に導入できません。このコンポーネントは無視されます。");
                     DestroyImmediate(this);
                     return;
                 }

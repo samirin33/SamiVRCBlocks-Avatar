@@ -54,17 +54,24 @@ namespace Samirin33.NDMF.Components
                 if (isLocalScale) gameObject.transform.localScale = resetScaleValue;
                 else
                 {
-                    var parentScale = gameObject.transform.parent.lossyScale;
-                    var x = resetScaleValue.x / parentScale.x;
-                    var y = resetScaleValue.y / parentScale.y;
-                    var z = resetScaleValue.z / parentScale.z;
-                    gameObject.transform.localScale = new Vector3(x, y, z);
+                    var parent = gameObject.transform.parent;
+                    var parentScale = parent != null ? parent.lossyScale : Vector3.one;
+                    gameObject.transform.localScale = new Vector3(
+                        DivideScale(resetScaleValue.x, parentScale.x),
+                        DivideScale(resetScaleValue.y, parentScale.y),
+                        DivideScale(resetScaleValue.z, parentScale.z));
                 }
             }
             if (destroyOnReset)
             {
                 Object.DestroyImmediate(gameObject);
             }
+        }
+
+        // 親スケールが 0 の軸は割ると NaN/Infinity になるため、目標値をそのまま使う。
+        private static float DivideScale(float value, float parentScale)
+        {
+            return Mathf.Abs(parentScale) > 1e-8f ? value / parentScale : value;
         }
     }
 }

@@ -8,8 +8,14 @@ using Samirin33.NDMF.Components;
 namespace Samirin33.NDMF.Components.Editor
 {
     [CustomEditor(typeof(LinkedTransform))]
+    [CanEditMultipleObjects]
     public class LinkedTransformEditor : SamirinMABaseEditor
     {
+        private static readonly GUIContent AxisLabel = new GUIContent("軸", "チェックした軸だけコピーします");
+        private static readonly GUIContent AxisXContent = new GUIContent("X", "X 軸をコピーします");
+        private static readonly GUIContent AxisYContent = new GUIContent("Y", "Y 軸をコピーします");
+        private static readonly GUIContent AxisZContent = new GUIContent("Z", "Z 軸をコピーします");
+
         private SerializedProperty _target;
         private SerializedProperty _sources;
 
@@ -76,26 +82,34 @@ namespace Samirin33.NDMF.Components.Editor
             {
                 serializedObject.Update();
 
-                EditorGUILayout.HelpBox(
+                DrawHelpBoxWithDefaultFont(
                     "複数ソースを重み付きでブレンドし、オフセット・倍率・座標空間を指定してターゲットへコピーできます。ソースは Transform または Humanoid ボーンを指定できます。",
                     MessageType.Info);
 
-                EditorGUILayout.PropertyField(_target, new GUIContent("Target", "コンポーネント追加時は自身。未指定の場合も自身に適用します"));
+                EditorGUILayout.PropertyField(_target, new GUIContent("ターゲット", "コンポーネント追加時は自身。未指定の場合も自身に適用します"));
                 EditorGUILayout.Space(5);
 
-                EditorGUILayout.LabelField("Sources");
+                EditorGUILayout.LabelField("ソース");
                 EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-                EditorGUI.BeginChangeCheck();
-                EditorGUILayout.PropertyField(_sources, new GUIContent("Sources"), true);
-                if (EditorGUI.EndChangeCheck())
-                    EnsureNewSourceWeightsDefaultToOne();
-                else if (_sources != null)
-                    _previousSourcesSize = _sources.arraySize;
+                if (serializedObject.isEditingMultipleObjects)
+                {
+                    // 配列サイズが揃っていないと、複数選択で書き込んだときに短い側へ切り詰められる
+                    DrawHelpBoxWithDefaultFont("複数選択中はソースを編集できません。1つずつ選択して編集してください。", MessageType.Info);
+                }
+                else
+                {
+                    EditorGUI.BeginChangeCheck();
+                    EditorGUILayout.PropertyField(_sources, new GUIContent("ソース", _sources.tooltip), true);
+                    if (EditorGUI.EndChangeCheck())
+                        EnsureNewSourceWeightsDefaultToOne();
+                    else if (_sources != null)
+                        _previousSourcesSize = _sources.arraySize;
+                }
                 EditorGUILayout.EndVertical();
                 EditorGUILayout.Space(5);
 
                 DrawAxisSection(
-                    "Position",
+                    "位置",
                     _linkPosition,
                     "コピーする",
                     _positionX,
@@ -106,7 +120,7 @@ namespace Samirin33.NDMF.Components.Editor
                     _positionOffset);
 
                 DrawAxisSection(
-                    "Rotation",
+                    "回転",
                     _linkRotation,
                     "コピーする",
                     _rotationX,
@@ -118,7 +132,7 @@ namespace Samirin33.NDMF.Components.Editor
                     offsetLabel: "オフセット (Euler)");
 
                 DrawAxisSection(
-                    "Scale",
+                    "スケール",
                     _linkScale,
                     "コピーする",
                     _scaleX,
@@ -165,24 +179,24 @@ namespace Samirin33.NDMF.Components.Editor
         {
             EditorGUILayout.LabelField(title);
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-            EditorGUILayout.PropertyField(enableProp, new GUIContent(enableLabel));
-            if (enableProp.boolValue)
+            EditorGUILayout.PropertyField(enableProp, new GUIContent(enableLabel, $"オンのとき、ソースの{title}をターゲットへコピーします"));
+            if (enableProp.boolValue || enableProp.hasMultipleDifferentValues)
             {
                 EditorGUI.indentLevel++;
-                EditorGUILayout.PropertyField(spaceProp, new GUIContent("座標空間"));
+                EditorGUILayout.PropertyField(spaceProp, new GUIContent("座標空間", spaceProp.tooltip));
 
                 EditorGUILayout.BeginHorizontal();
-                EditorGUILayout.PrefixLabel("軸");
+                EditorGUILayout.PrefixLabel(AxisLabel);
                 var labelWidth = EditorGUIUtility.labelWidth;
                 EditorGUIUtility.labelWidth = 14f;
-                EditorGUILayout.PropertyField(axisX, new GUIContent("X"), GUILayout.MinWidth(40f));
-                EditorGUILayout.PropertyField(axisY, new GUIContent("Y"), GUILayout.MinWidth(40f));
-                EditorGUILayout.PropertyField(axisZ, new GUIContent("Z"), GUILayout.MinWidth(40f));
+                EditorGUILayout.PropertyField(axisX, AxisXContent, GUILayout.MinWidth(40f));
+                EditorGUILayout.PropertyField(axisY, AxisYContent, GUILayout.MinWidth(40f));
+                EditorGUILayout.PropertyField(axisZ, AxisZContent, GUILayout.MinWidth(40f));
                 EditorGUIUtility.labelWidth = labelWidth;
                 EditorGUILayout.EndHorizontal();
 
-                EditorGUILayout.PropertyField(multiplierProp, new GUIContent("倍率"));
-                EditorGUILayout.PropertyField(offsetProp, new GUIContent(offsetLabel));
+                EditorGUILayout.PropertyField(multiplierProp, new GUIContent("倍率", multiplierProp.tooltip));
+                EditorGUILayout.PropertyField(offsetProp, new GUIContent(offsetLabel, offsetProp.tooltip));
                 EditorGUI.indentLevel--;
             }
             EditorGUILayout.EndVertical();
@@ -221,7 +235,7 @@ namespace Samirin33.NDMF.Components.Editor
                 EditorGUI.PropertyField(row, transformProp, new GUIContent("Transform"));
 
             row.y += line + gap;
-            EditorGUI.PropertyField(row, weightProp, new GUIContent("Weight"));
+            EditorGUI.PropertyField(row, weightProp, new GUIContent("重み", "ブレンド時の重み"));
 
             EditorGUI.EndProperty();
         }
@@ -241,7 +255,7 @@ namespace Samirin33.NDMF.Components.Editor
             EditorGUI.BeginChangeCheck();
             var next = EditorGUI.IntPopup(
                 row,
-                new GUIContent("Humanoid"),
+                new GUIContent("Humanoid ボーン", boneProp.tooltip),
                 boneProp.intValue,
                 _boneLabels,
                 _boneValues);
@@ -255,7 +269,7 @@ namespace Samirin33.NDMF.Components.Editor
             if (_boneLabels != null)
                 return;
 
-            var labels = new List<GUIContent> { new GUIContent("Root") };
+            var labels = new List<GUIContent> { new GUIContent("ルート（Armature）") };
             var values = new List<int> { LinkedTransform.Source.HumanoidRoot };
             foreach (HumanBodyBones bone in Enum.GetValues(typeof(HumanBodyBones)))
             {

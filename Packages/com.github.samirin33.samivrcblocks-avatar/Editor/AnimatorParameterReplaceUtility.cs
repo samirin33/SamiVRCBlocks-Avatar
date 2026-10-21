@@ -1,5 +1,7 @@
 using System.Collections.Generic;
 using System.Linq;
+using nadena.dev.ndmf;
+using Samirin33.NDMF.Base;
 using UnityEditor;
 using UnityEditor.Animations;
 using UnityEngine;
@@ -14,12 +16,14 @@ namespace Samirin33.NDMF.Components.Editor
     {
         /// <summary>
         /// 指定コントローラ内のパラメータ参照を fromParamName → toParamName に付け替える。
-        /// 対象: BlendTree の blendParameter/Y、Transition の Condition、
+        /// 対象: BlendTree の blendParameter/Y と Direct 子の directBlendParameter、Transition の Condition、
         /// State の Motion Speed/Time 用パラメータ（m_SpeedParameter, m_TimeParameter 等）、
         /// AnimationClip のカーブバインド。
         /// fromParamName 自体はパラメーター一覧から削除しない。参照が無くなっても残す。
         /// VRC Parameter Driver の書き込み先（parameters[].name）と読み取り元（source）は変えない。
         /// excludedLayerNames に含まれる名前のレイヤーは置換対象外とする。
+        /// 書き換えが必要な AnimationClip / BlendTree は複製してから差し替えるため、
+        /// 除外レイヤーや他のコントローラと共有しているモーションには影響しない。
         /// </summary>
         public static void ReplaceParameterReferences(AnimatorController controller, string fromParamName, string toParamName, IReadOnlyCollection<string> excludedLayerNames = null)
         {
@@ -39,25 +43,21 @@ namespace Samirin33.NDMF.Components.Editor
 
             EnsureParameterExists(controller, toParamName);
 
-            for (int i = 0; i < controller.layers.Length; i++)
+            var rewriter = new MotionRewriter(controller, fromParamName, toParamName);
+            var layers = controller.layers;
+            for (int i = 0; i < layers.Length; i++)
             {
-                var layer = controller.layers[i];
+                var layer = layers[i];
                 if (excludeSet != null && excludeSet.Contains(layer.name))
                     continue;
-                ReplaceInStateMachine(layer.stateMachine, fromParamName, toParamName);
-            }
-
-            var clips = CollectReferencedClips(controller, excludeSet);
-            foreach (var clip in clips)
-            {
-                if (clip != null)
-                    ReplaceParameterInClip(clip, fromParamName, toParamName);
+                ReplaceInStateMachine(layer.stateMachine, fromParamName, toParamName, rewriter);
             }
 
             if (preserved.HasValue)
                 RestoreParameterIfMissing(controller, preserved.Value);
 
-            EditorUtility.SetDirty(controller);
+            if (!SamirinBuildContext.IsBuilding)
+                EditorUtility.SetDirty(controller);
         }
 
         private struct ParameterSnapshot
@@ -115,32 +115,36 @@ namespace Samirin33.NDMF.Components.Editor
             controller.AddParameter(paramName, AnimatorControllerParameterType.Float);
         }
 
-        private static void ReplaceInStateMachine(AnimatorStateMachine stateMachine, string from, string to)
+        private static void ReplaceInStateMachine(AnimatorStateMachine stateMachine, string from, string to, MotionRewriter rewriter)
         {
             if (stateMachine == null) return;
 
             foreach (var state in stateMachine.states)
             {
                 var s = state.state;
+                if (s == null) continue;
                 ReplaceInStateMotionParameters(s, from, to);
                 // Parameter Driver の書き込み先は付け替えない。Behaviour は走査しない。
-                if (s.motion is BlendTree blendTree)
-                    ReplaceInBlendTree(blendTree, from, to);
+                var motion = rewriter.Rewrite(s.motion);
+                if (motion != s.motion)
+                    s.motion = motion;
             }
 
             foreach (var childSm in stateMachine.stateMachines)
-                ReplaceInStateMachine(childSm.stateMachine, from, to);
+                ReplaceInStateMachine(childSm.stateMachine, from, to, rewriter);
 
             ReplaceInTransitionsBase(stateMachine.anyStateTransitions, from, to);
             ReplaceInTransitionsBase(stateMachine.entryTransitions, from, to);
 
             foreach (var state in stateMachine.states)
             {
+                if (state.state == null) continue;
                 ReplaceInTransitionsBase(state.state.transitions, from, to);
             }
 
             foreach (var childSm in stateMachine.stateMachines)
             {
+                if (childSm.stateMachine == null) continue;
                 foreach (var transition in stateMachine.GetStateMachineTransitions(childSm.stateMachine))
                     ReplaceInTransition(transition, from, to);
             }
@@ -167,31 +171,6 @@ namespace Samirin33.NDMF.Components.Editor
                 so.ApplyModifiedPropertiesWithoutUndo();
         }
 
-        private static void ReplaceInBlendTree(BlendTree tree, string from, string to)
-        {
-            if (tree == null) return;
-
-            var so = new SerializedObject(tree);
-            var blendParam = so.FindProperty("m_BlendParameter");
-            var blendParamY = so.FindProperty("m_BlendParameterY");
-            bool changed = false;
-            if (blendParam != null && blendParam.stringValue == from) { blendParam.stringValue = to; changed = true; }
-            if (blendParamY != null && blendParamY.stringValue == from) { blendParamY.stringValue = to; changed = true; }
-            if (changed) so.ApplyModifiedPropertiesWithoutUndo();
-
-            so = new SerializedObject(tree);
-            var childs = so.FindProperty("m_Childs");
-            if (childs != null)
-            {
-                for (int i = 0; i < childs.arraySize; i++)
-                {
-                    var motionProp = childs.GetArrayElementAtIndex(i).FindPropertyRelative("m_Motion");
-                    if (motionProp?.objectReferenceValue is BlendTree childTree)
-                        ReplaceInBlendTree(childTree, from, to);
-                }
-            }
-        }
-
         private static void ReplaceInTransitionsBase(IEnumerable<AnimatorTransitionBase> transitions, string from, string to)
         {
             if (transitions == null) return;
@@ -207,77 +186,146 @@ namespace Samirin33.NDMF.Components.Editor
             var conditions = so.FindProperty("m_Conditions");
             if (conditions == null) return;
 
+            var changed = false;
             for (int i = 0; i < conditions.arraySize; i++)
             {
                 var ev = conditions.GetArrayElementAtIndex(i).FindPropertyRelative("m_ConditionEvent");
                 if (ev != null && ev.stringValue == from)
                 {
                     ev.stringValue = to;
-                    so.ApplyModifiedPropertiesWithoutUndo();
+                    changed = true;
                 }
             }
+
+            if (changed)
+                so.ApplyModifiedPropertiesWithoutUndo();
         }
 
-        private static HashSet<AnimationClip> CollectReferencedClips(AnimatorController controller, HashSet<string> excludedLayerNames = null)
+        /// <summary>
+        /// 置換が必要なモーションだけを複製して書き換える。同じモーションは同じ複製に対応させる。
+        /// </summary>
+        private sealed class MotionRewriter
         {
-            var set = new HashSet<AnimationClip>();
-            for (int i = 0; i < controller.layers.Length; i++)
+            private readonly AnimatorController _controller;
+            private readonly string _from;
+            private readonly string _to;
+            private readonly Dictionary<Motion, Motion> _rewritten = new Dictionary<Motion, Motion>();
+            private readonly Dictionary<Motion, bool> _referencesCache = new Dictionary<Motion, bool>();
+
+            public MotionRewriter(AnimatorController controller, string from, string to)
             {
-                var layer = controller.layers[i];
-                if (excludedLayerNames != null && excludedLayerNames.Contains(layer.name))
-                    continue;
-                CollectClipsFromStateMachine(layer.stateMachine, set);
+                _controller = controller;
+                _from = from;
+                _to = to;
             }
-            return set;
-        }
 
-        private static void CollectClipsFromStateMachine(AnimatorStateMachine stateMachine, HashSet<AnimationClip> set)
-        {
-            if (stateMachine == null) return;
-
-            foreach (var state in stateMachine.states)
+            public Motion Rewrite(Motion motion)
             {
-                var motion = state.state.motion;
-                if (motion is AnimationClip clip)
-                    set.Add(clip);
-                else if (motion is BlendTree tree)
-                    CollectClipsFromBlendTree(tree, set);
-            }
-            foreach (var childSm in stateMachine.stateMachines)
-                CollectClipsFromStateMachine(childSm.stateMachine, set);
-        }
+                if (motion == null || !References(motion))
+                    return motion;
 
-        private static void CollectClipsFromBlendTree(BlendTree tree, HashSet<AnimationClip> set)
-        {
-            if (tree == null) return;
-            foreach (var child in tree.children)
+                if (_rewritten.TryGetValue(motion, out var cached))
+                    return cached;
+
+                Motion result;
+                if (motion is BlendTree tree)
+                {
+                    var clone = new BlendTree();
+                    EditorUtility.CopySerialized(tree, clone);
+                    clone.name = tree.name;
+                    _rewritten[motion] = clone;
+                    RewriteBlendTree(clone);
+                    result = clone;
+                }
+                else if (motion is AnimationClip clip)
+                {
+                    var clone = Object.Instantiate(clip);
+                    clone.name = clip.name;
+                    _rewritten[motion] = clone;
+                    RewriteClip(clone);
+                    result = clone;
+                }
+                else
+                {
+                    return motion;
+                }
+
+                RegisterClone(motion, result);
+                return result;
+            }
+
+            private void RegisterClone(Motion original, Motion clone)
             {
-                if (child.motion is AnimationClip clip)
-                    set.Add(clip);
-                else if (child.motion is BlendTree childTree)
-                    CollectClipsFromBlendTree(childTree, set);
+                if (SamirinBuildContext.IsBuilding)
+                {
+                    ObjectRegistry.TryRegisterReplacedObject(ObjectRegistry.GetReference(original), clone);
+                    return;
+                }
+
+                // ビルド外で保存済みコントローラを書き換える場合、複製をサブアセットにしないと再読み込みで参照が切れる。
+                AnimatorControllerAssetUtility.EnsureSubAsset(clone, _controller);
             }
-        }
 
-        private static void ReplaceParameterInClip(AnimationClip clip, string fromParamName, string toParamName)
-        {
-            if (clip == null) return;
-
-            var bindings = AnimationUtility.GetCurveBindings(clip);
-            foreach (var binding in bindings)
+            private bool References(Motion motion)
             {
-                if (binding.type != typeof(Animator) || binding.propertyName != fromParamName)
-                    continue;
+                if (motion == null)
+                    return false;
+                if (_referencesCache.TryGetValue(motion, out var cached))
+                    return cached;
 
-                var curve = AnimationUtility.GetEditorCurve(clip, binding);
-                if (curve == null) continue;
+                // 循環参照に備えて先に false を入れておく。
+                _referencesCache[motion] = false;
 
-                var newBinding = binding;
-                newBinding.propertyName = toParamName;
-                AnimationUtility.SetEditorCurve(clip, binding, null);
-                AnimationUtility.SetEditorCurve(clip, newBinding, curve);
+                var result = false;
+                if (motion is BlendTree tree)
+                {
+                    result = tree.blendParameter == _from
+                             || tree.blendParameterY == _from
+                             || tree.children.Any(c => c.directBlendParameter == _from || References(c.motion));
+                }
+                else if (motion is AnimationClip clip)
+                {
+                    result = AnimationUtility.GetCurveBindings(clip)
+                        .Any(b => b.type == typeof(Animator) && b.propertyName == _from);
+                }
+
+                _referencesCache[motion] = result;
+                return result;
             }
-            EditorUtility.SetDirty(clip);
+
+            private void RewriteBlendTree(BlendTree tree)
+            {
+                if (tree.blendParameter == _from)
+                    tree.blendParameter = _to;
+                if (tree.blendParameterY == _from)
+                    tree.blendParameterY = _to;
+
+                var children = tree.children;
+                for (int i = 0; i < children.Length; i++)
+                {
+                    if (children[i].directBlendParameter == _from)
+                        children[i].directBlendParameter = _to;
+                    children[i].motion = Rewrite(children[i].motion);
+                }
+                tree.children = children;
+            }
+
+            private void RewriteClip(AnimationClip clip)
+            {
+                foreach (var binding in AnimationUtility.GetCurveBindings(clip))
+                {
+                    if (binding.type != typeof(Animator) || binding.propertyName != _from)
+                        continue;
+
+                    var curve = AnimationUtility.GetEditorCurve(clip, binding);
+                    if (curve == null) continue;
+
+                    var newBinding = binding;
+                    newBinding.propertyName = _to;
+                    AnimationUtility.SetEditorCurve(clip, binding, null);
+                    AnimationUtility.SetEditorCurve(clip, newBinding, curve);
+                }
+            }
         }
     }
 }

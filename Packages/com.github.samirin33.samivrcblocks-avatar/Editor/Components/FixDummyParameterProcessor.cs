@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using nadena.dev.modular_avatar.core;
 using nadena.dev.ndmf;
 using nadena.dev.ndmf.animator;
+using Samirin33.NDMF.Base;
 using Samirin33.NDMF.Components;
 using UnityEditor;
 using UnityEditor.Animations;
@@ -65,7 +66,8 @@ namespace Samirin33.NDMF.Components.Editor
             if (components.Length == 0)
                 return;
 
-            var services = context.ActivateExtensionContextRecursive<AnimatorServicesContext>();
+            // SamirinMABasePlugin が WithRequiredExtension(AnimatorServicesContext) で有効化済み。
+            var services = context.Extension<AnimatorServicesContext>();
 
             foreach (var component in components)
             {
@@ -170,14 +172,14 @@ namespace Samirin33.NDMF.Components.Editor
             var names = CollectNames(component.dummyParameterNames);
             if (names.Count == 0)
             {
-                Debug.LogWarning("[FixDummyParameter] ダミーパラメーター名が未設定のため、何もしません。", component);
+                SamirinBuildContext.ReportWarning("[FixDummyParameter] ダミーパラメーター名が未設定のため、何もしません。", component);
                 return;
             }
 
             var merges = component.GetComponents<ModularAvatarMergeAnimator>();
             if (merges == null || merges.Length == 0)
             {
-                Debug.LogWarning("[FixDummyParameter] 同じオブジェクトに MA Merge Animator がありません。", component);
+                SamirinBuildContext.ReportWarning("[FixDummyParameter] 同じオブジェクトに MA Merge Animator がありません。", component);
                 return;
             }
 
@@ -187,27 +189,27 @@ namespace Samirin33.NDMF.Components.Editor
                     continue;
                 if (merge.animator == null)
                 {
-                    Debug.LogWarning("[FixDummyParameter] MA Merge Animator に Animator が割り当てられていません。", merge);
+                    SamirinBuildContext.ReportWarning("[FixDummyParameter] MA Merge Animator に Animator が割り当てられていません。", merge);
                     continue;
                 }
 
                 if (merge.mergeAnimatorMode == MergeAnimatorMode.Replace)
                 {
-                    Debug.LogWarning(
+                    SamirinBuildContext.ReportWarning(
                         "[FixDummyParameter] Replace の MA Merge Animator はマージ先を置き換えるため、ダミー条件は揃えません。",
                         merge);
                     continue;
                 }
 
-                if (!TryGetMergeController(context, services, merge, out var source))
+                if (!TryGetMergeController(services, merge, out var source))
                 {
-                    Debug.LogWarning("[FixDummyParameter] 統合される Animator を取得できませんでした。", merge);
+                    SamirinBuildContext.ReportWarning("[FixDummyParameter] 統合される Animator を取得できませんでした。", merge);
                     continue;
                 }
 
-                if (!TryGetDestinationController(context, services, avatarRoot, merge, out var destination))
+                if (!TryGetDestinationController(services, avatarRoot, merge, out var destination))
                 {
-                    Debug.LogWarning("[FixDummyParameter] マージ先の Animator を取得できませんでした。", merge);
+                    SamirinBuildContext.ReportWarning("[FixDummyParameter] マージ先の Animator を取得できませんでした。", merge);
                     continue;
                 }
 
@@ -233,13 +235,13 @@ namespace Samirin33.NDMF.Components.Editor
 
             if (sourceUsage.Polarity == DummyUsage.Kind.NotBool || destinationUsage.Polarity == DummyUsage.Kind.NotBool)
             {
-                Debug.LogWarning($"[FixDummyParameter] {parameterName} は Bool ではないためスキップしました。", component);
+                SamirinBuildContext.ReportWarning($"[FixDummyParameter] {parameterName} は Bool ではないためスキップしました。", component);
                 return;
             }
 
             if (sourceUsage.Polarity == DummyUsage.Kind.Mixed || destinationUsage.Polarity == DummyUsage.Kind.Mixed)
             {
-                Debug.LogWarning(
+                SamirinBuildContext.ReportWarning(
                     $"[FixDummyParameter] {parameterName} は true と false の両方が遷移条件にあるため、ダミー条件を揃えられません。",
                     component);
                 return;
@@ -469,7 +471,7 @@ namespace Samirin33.NDMF.Components.Editor
                     var typeProp = entry.FindPropertyRelative("type");
                     if (ReadDriverType(typeProp) != 0)
                     {
-                        Debug.LogWarning(
+                        SamirinBuildContext.ReportWarning(
                             $"[FixDummyParameter] {parameterName} を Set 以外の Parameter Driver で書いているため、その書き込みは変えません。",
                             behaviour);
                         continue;
@@ -503,7 +505,6 @@ namespace Samirin33.NDMF.Components.Editor
         }
 
         private static bool TryGetDestinationController(
-            BuildContext context,
             AnimatorServicesContext services,
             GameObject avatarRoot,
             ModularAvatarMergeAnimator merge,
@@ -521,14 +522,19 @@ namespace Samirin33.NDMF.Components.Editor
                 if (candidate.mergeAnimatorMode != MergeAnimatorMode.Replace || candidate.animator == null)
                     continue;
 
-                return TryGetMergeController(context, services, candidate, out destination);
+                return TryGetMergeController(services, candidate, out destination);
             }
 
             return controllers.TryGetValue(merge.layerType, out destination) && destination != null;
         }
 
+        /// <summary>
+        /// MA Merge Animator は NDMF の IVirtualizeAnimatorController なので、AnimatorServicesContext の有効化時に
+        /// NDMF 自身が仮想化（相対パスの前置を含む）して Controllers へ登録する。
+        /// このパスは SamirinTransformingBeforeMA の直後に有効化されるため、そこで足された Merge Animator も含まれる。
+        /// 自前の複製（CloneDistinct / ApplyPathPrefix / GetMotionBasePath の消費）は MA 内部挙動の再実装になるので行わない。
+        /// </summary>
         private static bool TryGetMergeController(
-            BuildContext context,
             AnimatorServicesContext services,
             ModularAvatarMergeAnimator merge,
             out VirtualAnimatorController controller)
@@ -537,27 +543,7 @@ namespace Samirin33.NDMF.Components.Editor
             if (merge == null)
                 return false;
 
-            var controllers = services.ControllerContext.Controllers;
-            if (controllers.TryGetValue(merge, out controller) && controller != null)
-                return true;
-            if (merge.animator == null)
-                return false;
-
-            var virtualizer = (IVirtualizeAnimatorController)merge;
-            var basePath = virtualizer.GetMotionBasePath(context, false);
-            controller = services.ControllerContext.CloneContext.CloneDistinct(
-                merge.animator,
-                virtualizer.TargetControllerKey);
-            if (controller == null)
-                return false;
-
-            controllers[merge] = controller;
-            if (!string.IsNullOrEmpty(basePath))
-                new AnimationIndex(new[] { controller }).ApplyPathPrefix(basePath);
-
-            // 次に仮想化するとき、付与済みのパスへもう一度前置しない。
-            virtualizer.GetMotionBasePath(context, true);
-            return true;
+            return services.ControllerContext.Controllers.TryGetValue(merge, out controller) && controller != null;
         }
 
         private static List<string> CollectNames(string[] names)

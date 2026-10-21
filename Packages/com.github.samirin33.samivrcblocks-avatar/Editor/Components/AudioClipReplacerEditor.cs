@@ -8,6 +8,7 @@ using Samirin33.NDMF.Components;
 
 namespace Samirin33.NDMF.Components.Editor
 {
+    // Merge Animator や Source Controller を target から読み書きするため、複数選択編集には対応しない
     [CustomEditor(typeof(AudioClipReplacer))]
     public class AudioClipReplacerEditor : SamirinMABaseEditor
     {
@@ -56,8 +57,6 @@ namespace Samirin33.NDMF.Components.Editor
             {
                 serializedObject.Update();
 
-                SyncDirectModeSourceController();
-
                 DrawUserSettings();
 
                 EditorGUILayout.Space(8f);
@@ -92,10 +91,14 @@ namespace Samirin33.NDMF.Components.Editor
             if (mergeAnimator == null)
                 return;
 
-            var animator = mergeAnimator.GetComponent<Animator>();
-            var controller = animator != null ? animator.runtimeAnimatorController : null;
+            var controller = GetMergeAnimatorController(mergeAnimator);
             if (_sourceController.objectReferenceValue != controller)
                 _sourceController.objectReferenceValue = controller;
+        }
+
+        private static RuntimeAnimatorController GetMergeAnimatorController(ModularAvatarMergeAnimator mergeAnimator)
+        {
+            return AudioClipReplacerUtil.GetMergeAnimatorSource(mergeAnimator);
         }
 
         private void DrawUserSettings()
@@ -269,46 +272,25 @@ namespace Samirin33.NDMF.Components.Editor
                 }
 
                 if (GUILayout.Button("デフォルト値を取得"))
-                {
-                    ApplyDefaultsFromSource(
-                        index,
-                        clips,
-                        overrideVolume,
-                        volume,
-                        overridePitch,
-                        pitch,
-                        overridePlaybackOrder,
-                        playbackOrder,
-                        playbackOrderApplySettings,
-                        overrideDelayInSeconds,
-                        delayInSeconds);
-                }
+                    ApplyDefaultsFromSource(index);
             }
 
             EditorGUILayout.EndVertical();
             EditorGUILayout.Space(2f);
         }
 
-        private void ApplyDefaultsFromSource(
-            int index,
-            SerializedProperty clips,
-            SerializedProperty overrideVolume,
-            SerializedProperty volume,
-            SerializedProperty overridePitch,
-            SerializedProperty pitch,
-            SerializedProperty overridePlaybackOrder,
-            SerializedProperty playbackOrder,
-            SerializedProperty playbackOrderApplySettings,
-            SerializedProperty overrideDelayInSeconds,
-            SerializedProperty delayInSeconds)
+        private void ApplyDefaultsFromSource(int index)
         {
             var replacer = (AudioClipReplacer)target;
+            serializedObject.ApplyModifiedProperties();
             if (replacer.overrides == null || index < 0 || index >= replacer.overrides.Length)
                 return;
 
             var entry = replacer.overrides[index];
-            var avatarRoot = GetAvatarRoot(replacer);
+            var avatarRoot = FindAvatarRootObject(replacer);
 
+            // TryApplyDefaultsFromSource は entry（replacer の配列要素）を直接書き換えるので、先に Undo を記録する
+            Undo.RecordObject(replacer, "デフォルト値を取得");
             if (!AudioClipReplacerUtil.TryApplyDefaultsFromSource(
                     replacer,
                     avatarRoot,
@@ -316,55 +298,24 @@ namespace Samirin33.NDMF.Components.Editor
                     out var message))
             {
                 Debug.LogWarning($"[AudioClipReplacer] {message}", replacer);
+                serializedObject.Update();
+                GUIUtility.ExitGUI();
                 return;
             }
 
-            SyncClipsProperty(clips, entry.clips);
-            overrideVolume.boolValue = entry.overrideVolume;
-            volume.vector2Value = entry.volume;
-            overridePitch.boolValue = entry.overridePitch;
-            pitch.vector2Value = entry.pitch;
-            overridePlaybackOrder.boolValue = entry.overridePlaybackOrder;
-            playbackOrder.enumValueIndex = (int)entry.playbackOrder;
-            playbackOrderApplySettings.enumValueIndex = (int)entry.playbackOrderApplySettings;
-            overrideDelayInSeconds.boolValue = entry.overrideDelayInSeconds;
-            delayInSeconds.floatValue = entry.delayInSeconds;
-
-            serializedObject.ApplyModifiedProperties();
             EditorUtility.SetDirty(replacer);
+            PrefabUtility.RecordPrefabInstancePropertyModifications(replacer);
+            serializedObject.Update();
             Debug.Log($"[AudioClipReplacer] {message}", replacer);
-        }
-
-        private static void SyncClipsProperty(SerializedProperty clips, AudioClip[] values)
-        {
-            if (values == null || values.Length == 0)
-            {
-                clips.ClearArray();
-                return;
-            }
-
-            clips.arraySize = values.Length;
-            for (var i = 0; i < values.Length; i++)
-                clips.GetArrayElementAtIndex(i).objectReferenceValue = values[i];
-        }
-
-        private static GameObject GetAvatarRoot(AudioClipReplacer replacer)
-        {
-            var current = replacer.transform;
-            while (current != null)
-            {
-                if (current.GetComponent<VRCAvatarDescriptor>() != null)
-                    return current.gameObject;
-                current = current.parent;
-            }
-
-            return null;
+            GUIUtility.ExitGUI();
         }
 
         private void DrawDeveloperSettings()
         {
             EditorGUILayout.LabelField("モード", EditorStyles.boldLabel);
+            EditorGUI.BeginChangeCheck();
             EditorGUILayout.PropertyField(_mode, new GUIContent("Mode"));
+            var modeChanged = EditorGUI.EndChangeCheck();
 
             var mode = (AudioClipReplacerMode)_mode.enumValueIndex;
             EditorGUILayout.Space(4f);
@@ -373,22 +324,36 @@ namespace Samirin33.NDMF.Components.Editor
             switch (mode)
             {
                 case AudioClipReplacerMode.Direct:
+                    EditorGUI.BeginChangeCheck();
                     EditorGUILayout.PropertyField(_mergeAnimator, new GUIContent("Merge Animator"));
+                    if (EditorGUI.EndChangeCheck() || modeChanged)
+                        SyncDirectModeSourceController();
+
+                    var mergeAnimator = _mergeAnimator.objectReferenceValue as ModularAvatarMergeAnimator;
                     using (new EditorGUI.DisabledScope(true))
                     {
                         EditorGUILayout.PropertyField(
                             _sourceController,
                             new GUIContent(
                                 "Source Controller",
-                                "Merge Animator と同じ GameObject の Animator から自動取得されます"));
+                                "Merge Animator の Animator 欄（空なら同じ GameObject の Animator）から取得されます"));
                     }
 
-                    var mergeAnimator = _mergeAnimator.objectReferenceValue as ModularAvatarMergeAnimator;
-                    if (mergeAnimator != null && mergeAnimator.GetComponent<Animator>() == null)
+                    if (mergeAnimator != null && GetMergeAnimatorController(mergeAnimator) == null)
                     {
                         DrawHelpBoxWithDefaultFont(
-                            "Merge Animator と同じ GameObject に Animator が必要です。",
+                            "Merge Animator に Animator Controller が指定されていません。",
                             MessageType.Warning);
+                    }
+                    else if (mergeAnimator != null
+                             && !_sourceController.hasMultipleDifferentValues
+                             && _sourceController.objectReferenceValue != GetMergeAnimatorController(mergeAnimator))
+                    {
+                        DrawHelpBoxWithDefaultFont(
+                            "Source Controller が Merge Animator 側の Animator と一致していません。",
+                            MessageType.Warning);
+                        if (GUILayout.Button("Source Controller を再取得"))
+                            SyncDirectModeSourceController();
                     }
                     break;
 
@@ -414,8 +379,19 @@ namespace Samirin33.NDMF.Components.Editor
             EditorGUILayout.Space(4f);
             EditorGUILayout.LabelField("説明・ターゲット", EditorStyles.boldLabel);
 
+            var pendingIndex = -1;
+            var pendingAction = ArrayRowAction.None;
             for (var i = 0; i < _overrides.arraySize; i++)
-                DrawDeveloperOverrideElement(i);
+            {
+                var action = DrawDeveloperOverrideElement(i);
+                if (action != ArrayRowAction.None)
+                {
+                    pendingIndex = i;
+                    pendingAction = action;
+                }
+            }
+
+            ApplyArrayRowAction(_overrides, pendingIndex, pendingAction);
         }
 
         private static void DrawStateNamesProperty(SerializedProperty stateNames)
@@ -426,6 +402,7 @@ namespace Samirin33.NDMF.Components.Editor
             EditorGUILayout.LabelField("検索ステート名", EditorStyles.boldLabel);
             EditorGUI.indentLevel++;
 
+            var removeIndex = -1;
             for (var i = 0; i < stateNames.arraySize; i++)
             {
                 EditorGUILayout.BeginHorizontal();
@@ -433,14 +410,12 @@ namespace Samirin33.NDMF.Components.Editor
                     stateNames.GetArrayElementAtIndex(i),
                     new GUIContent($"ステート {i + 1}"));
                 if (GUILayout.Button("削除", GUILayout.Width(48f)))
-                {
-                    stateNames.DeleteArrayElementAtIndex(i);
-                    EditorGUILayout.EndHorizontal();
-                    break;
-                }
+                    removeIndex = i;
 
                 EditorGUILayout.EndHorizontal();
             }
+
+            ApplyArrayRowAction(stateNames, removeIndex, ArrayRowAction.Remove);
 
             if (GUILayout.Button("ステート名を追加"))
                 stateNames.arraySize++;
@@ -448,7 +423,7 @@ namespace Samirin33.NDMF.Components.Editor
             EditorGUI.indentLevel--;
         }
 
-        private void DrawDeveloperOverrideElement(int index)
+        private ArrayRowAction DrawDeveloperOverrideElement(int index)
         {
             var element = _overrides.GetArrayElementAtIndex(index);
             var description = element.FindPropertyRelative(nameof(AudioClipOverride.description));
@@ -463,35 +438,9 @@ namespace Samirin33.NDMF.Components.Editor
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
 
             EditorGUILayout.BeginHorizontal();
-            using (new EditorGUI.DisabledScope(index == 0))
-            {
-                if (GUILayout.Button("↑", GUILayout.Width(28f)))
-                {
-                    _overrides.MoveArrayElement(index, index - 1);
-                    GUI.FocusControl(null);
-                }
-            }
-
-            using (new EditorGUI.DisabledScope(index >= _overrides.arraySize - 1))
-            {
-                if (GUILayout.Button("↓", GUILayout.Width(28f)))
-                {
-                    _overrides.MoveArrayElement(index, index + 1);
-                    GUI.FocusControl(null);
-                }
-            }
-
             EditorGUILayout.LabelField(label, EditorStyles.miniBoldLabel);
-
-            if (GUILayout.Button("削除", GUILayout.Width(48f)))
-            {
-                _overrides.DeleteArrayElementAtIndex(index);
-                GUI.FocusControl(null);
-                EditorGUILayout.EndHorizontal();
-                EditorGUILayout.EndVertical();
-                return;
-            }
-
+            GUILayout.FlexibleSpace();
+            var action = DrawArrayRowButtons(index, _overrides.arraySize);
             EditorGUILayout.EndHorizontal();
 
             EditorGUILayout.PropertyField(
@@ -512,6 +461,7 @@ namespace Samirin33.NDMF.Components.Editor
 
             EditorGUILayout.EndVertical();
             EditorGUILayout.Space(2f);
+            return action;
         }
     }
 }

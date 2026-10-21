@@ -54,8 +54,8 @@ namespace Samirin33.NDMF.Components.Editor
                 if (checkers == null || checkers.Length == 0)
                     continue;
 
-                // ObjectChangeEvents 中にダイアログを出さない。delayCall 側で照合する。
-                PackageVersionCheckerService.CheckPlacedHierarchy(go, forceDialog: true);
+                // ObjectChangeEvents 中にダイアログを出さない。サービス側で遅延・セッション内抑制して照合する。
+                PackageVersionCheckerService.CheckPlacedHierarchy(go, forceDialog: false);
             }
         }
 

@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using UnityEditor;
 using UnityEditor.Animations;
@@ -8,6 +7,7 @@ using UnityEngine;
 using nadena.dev.modular_avatar.core;
 using VRC.SDK3.Avatars.Components;
 using VRC.SDK3.Avatars.ScriptableObjects;
+using Samirin33.NDMF.Base;
 using Samirin33.NDMF.Base.Plugin;
 using Samirin33.NDMF.Components;
 
@@ -313,22 +313,19 @@ namespace Samirin33.NDMF.Components.Editor
         {
             paramNamesToRegister = new List<(string, ParameterSyncType)>();
 
-            if (!Directory.Exists(GeneratedFolder))
-                Directory.CreateDirectory(GeneratedFolder);
-
-            var emptyMotion = LoadEmptyMotion();
             var paramDriverType = GetVRCAvatarParameterDriverType();
             if (paramDriverType == null)
             {
-                Debug.LogError("[ResizableSyncParameters] VRCAvatarParameterDriver 型が見つかりません。VRChat SDK3 Avatars がインストールされているか確認してください。");
+                SamirinBuildContext.ReportError("[ResizableSyncParameters] VRCAvatarParameterDriver 型が見つかりません。VRChat SDK3 Avatars がインストールされているか確認してください。");
                 return null;
             }
 
-            var controllerPath = $"{GeneratedFolder}/ResizableSyncParameters_Generated.controller";
-            if (AssetDatabase.LoadAssetAtPath<AnimatorController>(controllerPath) != null)
-                AssetDatabase.DeleteAsset(controllerPath);
+            var emptyMotion = LoadEmptyMotion();
 
-            var controller = AnimatorController.CreateAnimatorControllerAtPath(controllerPath);
+            const string controllerName = "ResizableSyncParameters_Generated";
+            var controller = ModularAvatarMergeAnimatorUtility.CreateGeneratedController(
+                controllerName,
+                $"{GeneratedFolder}/{controllerName}.controller");
             if (controller == null)
                 return null;
 
@@ -367,7 +364,7 @@ namespace Samirin33.NDMF.Components.Editor
                     paramNamesToRegister.Add((syncParamName, ParameterSyncType.Bool));
                 }
 
-                var layer = CreateLayerForParam(intParamName, bitCount, maxValue, emptyMotion, writeDefault, triggerName);
+                var layer = CreateLayerForParam(paramName, intParamName, bitCount, maxValue, emptyMotion, writeDefault, triggerName);
                 layersToAdd.Add((layer, paramName, intParamName, bitCount, maxValue, isFloat, triggerName));
             }
 
@@ -382,7 +379,7 @@ namespace Samirin33.NDMF.Components.Editor
                     defaultBool = true
                 });
 
-                var rangeLayer = CreateRangeConvertLayer(settings, writeDefault);
+                var rangeLayer = CreateRangeConvertLayer(settings, emptyMotion, writeDefault);
                 if (rangeLayer != null)
                     controller.AddLayer(rangeLayer);
             }
@@ -392,15 +389,12 @@ namespace Samirin33.NDMF.Components.Editor
 
             AnimatorControllerAssetUtility.RegisterControllerHierarchy(controller);
 
-            foreach (var (_, _, intParamName, bitCount, maxValue, _, triggerName) in layersToAdd)
-                AddParamDriverBehaviours(controller, intParamName, bitCount, maxValue, paramDriverType, triggerName);
+            foreach (var (_, paramName, intParamName, bitCount, maxValue, _, triggerName) in layersToAdd)
+                AddParamDriverBehaviours(controller, paramName, intParamName, bitCount, maxValue, paramDriverType, triggerName);
 
             AddRangeConvertParamDrivers(controller, settings, paramDriverType);
 
-            EditorUtility.SetDirty(controller);
-            UnityEditorInternal.InternalEditorUtility.RepaintAllViews();
-
-            return ModularAvatarMergeAnimatorUtility.ReloadControllerAtPath(controllerPath);
+            return ModularAvatarMergeAnimatorUtility.FinalizeGeneratedController(controller);
         }
 
         /// <summary>
@@ -409,7 +403,9 @@ namespace Samirin33.NDMF.Components.Editor
         private static void EnsureSubAsset(UnityEngine.Object obj, UnityEngine.Object mainAsset)
             => AnimatorControllerAssetUtility.EnsureSubAsset(obj, mainAsset);
 
-        private static AnimatorControllerLayer CreateLayerForParam(string paramName, int bitCount, int maxValue,
+        /// <param name="sourceParamName">同期 Bool 名の生成に使う元パラメーター名</param>
+        /// <param name="paramName">比較に使う Int パラメーター名（{元の名前}_Int）</param>
+        private static AnimatorControllerLayer CreateLayerForParam(string sourceParamName, string paramName, int bitCount, int maxValue,
             AnimationClip emptyMotion, bool writeDefault, string valueChangedTriggerName)
         {
             var fireTrigger = !string.IsNullOrEmpty(valueChangedTriggerName);
@@ -545,7 +541,7 @@ namespace Samirin33.NDMF.Components.Editor
                 remoteIn.AddCondition(AnimatorConditionMode.NotEqual, value, paramName);
                 for (int b = 0; b < bitCount; b++)
                 {
-                    var syncParamName = $"SUM/ResizableSync/{paramName}/{b}";
+                    var syncParamName = ResizableSyncParameters.GetSyncBoolParamName(sourceParamName, b);
                     var boolVal = ((value >> b) & 1) != 0;
                     remoteIn.AddCondition(boolVal ? AnimatorConditionMode.If : AnimatorConditionMode.IfNot, 0, syncParamName);
                 }
@@ -567,11 +563,11 @@ namespace Samirin33.NDMF.Components.Editor
             };
         }
 
-        private static AnimatorControllerLayer CreateRangeConvertLayer(ResizableSyncParameters.SyncParamSetting[] settings, bool writeDefault)
+        private static AnimatorControllerLayer CreateRangeConvertLayer(ResizableSyncParameters.SyncParamSetting[] settings,
+            AnimationClip emptyMotion, bool writeDefault)
         {
             if (settings.Length == 0) return null;
 
-            var emptyMotion = LoadEmptyMotion();
             var rootSm = new AnimatorStateMachine { name = "RangeConvert" };
 
             var brunchState = rootSm.AddState("Brunch", new Vector3(300, 120, 0));
@@ -789,7 +785,7 @@ namespace Samirin33.NDMF.Components.Editor
             so.ApplyModifiedPropertiesWithoutUndo();
         }
 
-        private static void AddParamDriverBehaviours(AnimatorController controller, string paramName, int bitCount, int maxValue,
+        private static void AddParamDriverBehaviours(AnimatorController controller, string sourceParamName, string paramName, int bitCount, int maxValue,
             Type paramDriverType, string valueChangedTriggerName)
         {
             if (paramDriverType == null || !typeof(StateMachineBehaviour).IsAssignableFrom(paramDriverType)) return;
@@ -824,7 +820,7 @@ namespace Samirin33.NDMF.Components.Editor
                         for (int b = 0; b < bitCount; b++)
                             boolValues[b] = ((value >> b) & 1) != 0;
 
-                        SetParamDriverParameters(behaviour, paramName, value, boolValues, isLocal);
+                        SetParamDriverParameters(behaviour, sourceParamName, paramName, value, boolValues, isLocal);
 
                         // Local は Changed の1フレーム、Remote は元々1フレームの Binary でトリガーを立てる。
                         var fireTrigger = !string.IsNullOrEmpty(valueChangedTriggerName)
@@ -872,7 +868,8 @@ namespace Samirin33.NDMF.Components.Editor
             so.ApplyModifiedPropertiesWithoutUndo();
         }
 
-        private static void SetParamDriverParameters(StateMachineBehaviour behaviour, string paramName, int intValue, bool[] boolValues, bool isLocal)
+        /// <param name="paramName">Remote 側で書き込む Int パラメーター名（{元の名前}_Int）</param>
+        private static void SetParamDriverParameters(StateMachineBehaviour behaviour, string sourceParamName, string paramName, int intValue, bool[] boolValues, bool isLocal)
         {
             var so = new SerializedObject(behaviour);
             var parametersProp = so.FindProperty("parameters");
@@ -884,8 +881,7 @@ namespace Samirin33.NDMF.Components.Editor
             {
                 for (int i = 0; i < boolValues.Length; i++)
                 {
-                    // paramName は int パラメータ名（{名前}_Int）
-                    var syncParamName = $"SUM/ResizableSync/{paramName}/{i}";
+                    var syncParamName = ResizableSyncParameters.GetSyncBoolParamName(sourceParamName, i);
                     parametersProp.InsertArrayElementAtIndex(i);
                     SetParamDriverEntry(parametersProp.GetArrayElementAtIndex(i), syncParamName, boolValues[i] ? 1 : 0);
                 }
@@ -925,27 +921,7 @@ namespace Samirin33.NDMF.Components.Editor
         }
 
         private static AnimationClip LoadEmptyMotion()
-        {
-            var path = AssetDatabase.GUIDToAssetPath(EmptyMotionGUID);
-            if (!string.IsNullOrEmpty(path))
-            {
-                var loadedClip = AssetDatabase.LoadAssetAtPath<AnimationClip>(path);
-                if (loadedClip != null) return loadedClip;
-            }
-
-            if (!Directory.Exists(GeneratedFolder))
-                Directory.CreateDirectory(GeneratedFolder);
-
-            var clipPath = $"{GeneratedFolder}/ResizableSyncParameters_Empty.anim";
-            var emptyClip = AssetDatabase.LoadAssetAtPath<AnimationClip>(clipPath);
-            if (emptyClip == null)
-            {
-                emptyClip = new AnimationClip();
-                AssetDatabase.CreateAsset(emptyClip, clipPath);
-                AssetDatabase.SaveAssets();
-            }
-            return emptyClip;
-        }
+            => ModularAvatarMergeAnimatorUtility.LoadOrCreateEmptyClip(EmptyMotionGUID, $"{GeneratedFolder}/ResizableSyncParameters_Empty.anim");
 
         private static Type GetVRCAvatarParameterDriverType()
         {

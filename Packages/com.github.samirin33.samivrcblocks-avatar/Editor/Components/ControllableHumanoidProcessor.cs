@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
+using nadena.dev.ndmf;
+using nadena.dev.ndmf.animator;
 using UnityEditor;
-using UnityEditor.Animations;
 using UnityEngine;
 using VRC.SDK3.Avatars.Components;
 using VRC.SDK3.Dynamics.Constraint.Components;
+using Samirin33.NDMF.Base;
 using Samirin33.NDMF.Components;
 using Samirin33.NDMF.Constraints;
 
@@ -23,6 +25,64 @@ namespace Samirin33.NDMF.Components.Editor
             ControllableHumanoid.RestoreFollowSpaceHandler = RestoreFollowSpaces;
         }
 
+        /// <summary>
+        /// ControllableHumanoid の処理は拡張コンテキストを宣言しない汎用パス内で動くため、
+        /// AnimatorServicesContext を自前で開き、同じパス内で必ず閉じる。
+        /// NDMF の実行計画上は非アクティブ扱いなので、開いたままにすると後段（VRCFury 等）が
+        /// 直接編集した Animator を、ビルド終了時のコミットが古い仮想コントローラで上書きする。
+        /// 閉じたとき ObjectPathRemapper が、開いた時点から移動したオブジェクトのパスを
+        /// 全 Animator（特殊レイヤー・PlayAudio 含む）へ反映する。
+        /// </summary>
+        private sealed class AnimatorServicesScope : IDisposable
+        {
+            private readonly BuildContext _context;
+            private readonly bool _ownsServices;
+            private readonly bool _ownsControllers;
+
+            public AnimatorServicesContext Services { get; }
+
+            private AnimatorServicesScope(BuildContext context)
+            {
+                _context = context;
+                _ownsControllers = !IsActive<VirtualControllerContext>(context);
+                _ownsServices = !IsActive<AnimatorServicesContext>(context);
+                Services = context.ActivateExtensionContextRecursive<AnimatorServicesContext>();
+            }
+
+            public static AnimatorServicesScope Open(ControllableHumanoid component)
+            {
+                var context = SamirinBuildContext.Current;
+                if (context != null)
+                    return new AnimatorServicesScope(context);
+
+                SamirinBuildContext.ReportError(
+                    "[ControllableHumanoid] NDMF のビルド外では Armature の分割とアニメーションのパス書き換えを行えません。",
+                    component);
+                return null;
+            }
+
+            private static bool IsActive<T>(BuildContext context) where T : IExtensionContext
+            {
+                try
+                {
+                    context.Extension<T>();
+                    return true;
+                }
+                catch (Exception)
+                {
+                    return false;
+                }
+            }
+
+            public void Dispose()
+            {
+                if (_ownsServices)
+                    _context.DeactivateExtensionContext<AnimatorServicesContext>();
+                if (_ownsControllers)
+                    _context.DeactivateExtensionContext<VirtualControllerContext>();
+            }
+        }
+
         #region Build
 
         public static void Build(ControllableHumanoid component, GameObject avatarRootObject)
@@ -32,7 +92,7 @@ namespace Samirin33.NDMF.Components.Editor
 
             if (!avatarRootObject.TryGetComponent<Animator>(out var animator) || !animator.isHuman)
             {
-                Debug.LogWarning(
+                SamirinBuildContext.ReportWarning(
                     "[ControllableHumanoid] Humanoid Animator が見つからないためスキップします。",
                     component);
                 return;
@@ -40,7 +100,7 @@ namespace Samirin33.NDMF.Components.Editor
 
             if (!avatarRootObject.TryGetComponent<VRCAvatarDescriptor>(out var descriptor))
             {
-                Debug.LogWarning(
+                SamirinBuildContext.ReportWarning(
                     "[ControllableHumanoid] VRCAvatarDescriptor が見つからないためスキップします。",
                     component);
                 return;
@@ -49,7 +109,7 @@ namespace Samirin33.NDMF.Components.Editor
             var hipsBone = animator.GetBoneTransform(HumanBodyBones.Hips);
             if (hipsBone == null)
             {
-                Debug.LogWarning("[ControllableHumanoid] Hips ボーンが見つかりません。", component);
+                SamirinBuildContext.ReportWarning("[ControllableHumanoid] Hips ボーンが見つかりません。", component);
                 return;
             }
 
@@ -57,37 +117,35 @@ namespace Samirin33.NDMF.Components.Editor
             var armatureRoot = hipsBone.parent;
             if (armatureRoot == null)
             {
-                Debug.LogWarning("[ControllableHumanoid] Armature ルート（Hips の親）が見つかりません。", component);
+                SamirinBuildContext.ReportWarning("[ControllableHumanoid] Armature ルート（Hips の親）が見つかりません。", component);
                 return;
             }
 
             var humanoidBones = CollectHumanoidBones(animator, descriptor);
             if (humanoidBones.Count == 0)
             {
-                Debug.LogWarning("[ControllableHumanoid] ヒューマノイドボーンが空です。", component);
+                SamirinBuildContext.ReportWarning("[ControllableHumanoid] ヒューマノイドボーンが空です。", component);
                 return;
             }
 
-            var avatarRoot = avatarRootObject.transform;
-            var oldPaths = new Dictionary<Transform, string>();
-            TrackHierarchy(armatureRoot, avatarRoot, oldPaths);
-            if (component.links != null)
+            // 階層を動かす前に開き、分割前のパスを ObjectPathRemapper に記録させる。
+            using (var animators = AnimatorServicesScope.Open(component))
             {
-                foreach (var entry in component.links)
-                {
-                    if (entry?.parentChild != null)
-                        TrackHierarchy(entry.parentChild, avatarRoot, oldPaths);
-                }
-            }
+                if (animators == null)
+                    return;
 
-            if (component.playerFollowObjects != null)
-            {
-                foreach (var entry in component.playerFollowObjects)
-                {
-                    if (entry?.target != null)
-                        TrackHierarchy(entry.target, avatarRoot, oldPaths);
-                }
+                BuildSplit(component, avatarRootObject, armatureRoot, humanoidBones, animators.Services);
             }
+        }
+
+        private static void BuildSplit(
+            ControllableHumanoid component,
+            GameObject avatarRootObject,
+            Transform armatureRoot,
+            Dictionary<Transform, HumanBodyBones> humanoidBones,
+            AnimatorServicesContext services)
+        {
+            var avatarRoot = avatarRootObject.transform;
 
             var clonedArmature = new GameObject(armatureRoot.name).transform;
             clonedArmature.SetParent(armatureRoot.parent, false);
@@ -177,40 +235,12 @@ namespace Samirin33.NDMF.Components.Editor
 
             PlacePlayerFollowObjects(component, originalByBone, boneMap);
 
-            var remaps = new List<ControllableHumanoid.PathRemapEntry>(oldPaths.Count);
-            foreach (var kvp in oldPaths)
-            {
-                if (kvp.Key == null)
-                    continue;
-
-                var newPath = AnimationUtility.CalculateTransformPath(kvp.Key, avatarRoot);
-                if (string.IsNullOrEmpty(kvp.Value) || kvp.Value == newPath)
-                    continue;
-
-                remaps.Add(new ControllableHumanoid.PathRemapEntry
-                {
-                    oldPath = kvp.Value,
-                    newPath = newPath,
-                });
-            }
-
-            remaps.Sort((a, b) => b.oldPath.Length.CompareTo(a.oldPath.Length));
-            component.PendingPathRemaps = remaps;
-            component.PathRemapsApplied = false;
             component.SourceApplyConstraints = sourceConstraints;
             component.BoneApplyConstraints = boneApplyConstraints;
 
-            RemapFxLayerPaths(component, avatarRootObject);
-        }
-
-        private static void TrackHierarchy(Transform root, Transform avatarRoot, Dictionary<Transform, string> paths)
-        {
-            if (root == null || root == avatarRoot || paths.ContainsKey(root))
-                return;
-
-            paths[root] = AnimationUtility.CalculateTransformPath(root, avatarRoot);
-            for (var i = 0; i < root.childCount; i++)
-                TrackHierarchy(root.GetChild(i), avatarRoot, paths);
+            // 移動したボーン（OriginalArmature 配下へ移った元 Armature 等）のパスは、
+            // スコープを閉じるときに ObjectPathRemapper が書き換える。
+            ExpandConstraintToggleAnimations(component, services);
         }
 
         private static void ApplyLink(
@@ -533,7 +563,7 @@ namespace Samirin33.NDMF.Components.Editor
             if (mismatches.Count == 0)
                 return;
 
-            Debug.LogWarning(
+            SamirinBuildContext.ReportWarning(
                 "[ControllableHumanoid] 複製ボーンの親子関係またはローカル座標がオリジナルと一致しません。" +
                 "ローカル解決の追従がずれる可能性があります。\n" + string.Join("\n", mismatches),
                 component);
@@ -725,45 +755,23 @@ namespace Samirin33.NDMF.Components.Editor
             return result;
         }
 
+        /// <summary>
+        /// 分割後に追加された Animator（VRCFury 等）にある ControllableHumanoid 向けカーブを、
+        /// 追従 Constraint / HeadChop のカーブへ展開する。
+        /// 分割で移動したボーンのパスは Build 時点のスコープで書き換え済み。
+        /// </summary>
         public static void RemapFxLayerPaths(ControllableHumanoid component, GameObject avatarRootObject)
         {
             if (component == null || avatarRootObject == null)
                 return;
 
-            if (!component.PathRemapsApplied
-                && component.PendingPathRemaps != null
-                && component.PendingPathRemaps.Count > 0)
-                ApplyPathRemaps(avatarRootObject, component.PendingPathRemaps);
-
-            component.PathRemapsApplied = true;
-
-            ExpandConstraintToggleAnimations(component, avatarRootObject);
-        }
-
-        private static void ApplyPathRemaps(GameObject avatarRootObject, List<ControllableHumanoid.PathRemapEntry> remaps)
-        {
-            var controllers = VRCAvatarDescriptorControllerUtility.GetControllers(
-                avatarRootObject,
-                VRCAvatarDescriptor.AnimLayerType.Base,
-                VRCAvatarDescriptor.AnimLayerType.Additive,
-                VRCAvatarDescriptor.AnimLayerType.Gesture,
-                VRCAvatarDescriptor.AnimLayerType.Action,
-                VRCAvatarDescriptor.AnimLayerType.FX);
-
-            // 複数レイヤーで共有されたクリップへ二重に適用しない。
-            var clips = new HashSet<AnimationClip>();
-            var playAudios = new HashSet<VRCAnimatorPlayAudio>();
-            foreach (var controller in controllers)
+            using (var animators = AnimatorServicesScope.Open(component))
             {
-                clips.UnionWith(CollectReferencedClips(controller));
-                foreach (var layer in controller.layers)
-                    CollectPlayAudios(layer.stateMachine, playAudios);
-            }
+                if (animators == null)
+                    return;
 
-            foreach (var clip in clips)
-                RemapClipPaths(clip, remaps);
-            foreach (var playAudio in playAudios)
-                RemapPlayAudioPath(playAudio, remaps);
+                ExpandConstraintToggleAnimations(component, animators.Services);
+            }
         }
 
         /// <summary>
@@ -776,8 +784,7 @@ namespace Samirin33.NDMF.Components.Editor
             if (component == null || avatarRootObject == null || component.BoneApplyConstraints == null)
                 return;
 
-            var avatarRoot = avatarRootObject.transform;
-            var remaps = new List<ControllableHumanoid.PathRemapEntry>();
+            var targets = new List<ControllableHumanoid.BoneApplyConstraint>();
             foreach (var entry in component.BoneApplyConstraints)
             {
                 if (entry.constraint == null || entry.parent == null || entry.source == null)
@@ -789,46 +796,50 @@ namespace Samirin33.NDMF.Components.Editor
 
                 if (!IsUnder(bone, entry.parent))
                 {
-                    Debug.LogWarning(
+                    SamirinBuildContext.ReportWarning(
                         $"[ControllableHumanoid] {bone.name} が複製時の親 {entry.parent.name} の外へ移動されたため、" +
                         "ローカル解決の追従を補正できません。",
-                        component);
+                        component, bone);
                     continue;
                 }
 
-                var movedPath = AnimationUtility.CalculateTransformPath(bone, avatarRoot);
-
-                var space = new GameObject(bone.name + "_FollowSpace").transform;
-                space.SetParent(bone.parent, false);
-                TransformMath.CopyWorldPose(entry.parent, space);
-                bone.SetParent(space, false);
-                // ビルド中に Constraint が評価済みだと現在のワールド姿勢はずれているので、追従元のローカル値を正とする。
-                TransformMath.CopyLocalPose(entry.source, bone);
-
-                var newPath = AnimationUtility.CalculateTransformPath(bone, avatarRoot);
-                AddRemap(remaps, movedPath, newPath);
-                AddRemap(remaps, entry.path, newPath);
+                targets.Add(entry);
             }
 
-            if (remaps.Count == 0)
+            if (targets.Count == 0)
                 return;
 
-            remaps.Sort((a, b) => b.oldPath.Length.CompareTo(a.oldPath.Length));
-            ApplyPathRemaps(avatarRootObject, remaps);
-        }
-
-        private static void AddRemap(List<ControllableHumanoid.PathRemapEntry> remaps, string oldPath, string newPath)
-        {
-            if (string.IsNullOrEmpty(oldPath) || oldPath == newPath)
-                return;
-            if (remaps.Exists(r => r.oldPath == oldPath))
-                return;
-
-            remaps.Add(new ControllableHumanoid.PathRemapEntry
+            // 移動前に開くと、ここで挟む _FollowSpace による移動を ObjectPathRemapper が反映する。
+            using (var animators = AnimatorServicesScope.Open(component))
             {
-                oldPath = oldPath,
-                newPath = newPath,
-            });
+                if (animators == null)
+                    return;
+
+                var remapper = animators.Services.ObjectPathRemapper;
+                var aliases = new Dictionary<string, string>();
+                foreach (var entry in targets)
+                {
+                    var bone = entry.constraint.transform;
+                    var movedPath = remapper.GetVirtualPathForObject(bone);
+
+                    // 分割直後のパスを参照したまま残っているカーブも同じボーンへ向ける。
+                    // そのパスに今は別オブジェクトがある場合、その参照を奪わないよう付け替えない。
+                    if (!string.IsNullOrEmpty(entry.path)
+                        && entry.path != movedPath
+                        && remapper.GetObjectForPath(entry.path) == null)
+                        aliases[entry.path] = movedPath;
+
+                    var space = new GameObject(bone.name + "_FollowSpace").transform;
+                    space.SetParent(bone.parent, false);
+                    TransformMath.CopyWorldPose(entry.parent, space);
+                    bone.SetParent(space, false);
+                    // ビルド中に Constraint が評価済みだと現在のワールド姿勢はずれているので、追従元のローカル値を正とする。
+                    TransformMath.CopyLocalPose(entry.source, bone);
+                }
+
+                if (aliases.Count > 0)
+                    animators.Services.AnimationIndex.RewritePaths(aliases);
+            }
         }
 
         private struct ConstraintToggleBinding
@@ -846,38 +857,32 @@ namespace Samirin33.NDMF.Components.Editor
             "m_Active",
         };
 
-        private static void ExpandConstraintToggleAnimations(ControllableHumanoid component, GameObject avatarRootObject)
+        private static void ExpandConstraintToggleAnimations(ControllableHumanoid component, AnimatorServicesContext services)
         {
-            var avatarRoot = avatarRootObject.transform;
-            var componentPath = AnimationUtility.CalculateTransformPath(component.transform, avatarRoot);
-            var sourceBindings = BuildToggleBindings(component.SourceApplyConstraints, avatarRoot, "m_Enabled");
-            var boneBindings = BuildBoneToggleBindings(component.BoneApplyConstraints, avatarRoot);
-            var headChopBinding = BuildHeadChopBinding(component.BuiltHeadChop, avatarRoot);
+            // 仮想コントローラ内のパスはスコープを開いた時点のもの。新しいカーブも同じ基準のパスで書く。
+            var remapper = services.ObjectPathRemapper;
+            Func<Transform, string> pathOf = remapper.GetVirtualPathForObject;
 
-            var controllers = VRCAvatarDescriptorControllerUtility.GetControllers(
-                avatarRootObject,
-                VRCAvatarDescriptor.AnimLayerType.Base,
-                VRCAvatarDescriptor.AnimLayerType.Additive,
-                VRCAvatarDescriptor.AnimLayerType.Gesture,
-                VRCAvatarDescriptor.AnimLayerType.Action,
-                VRCAvatarDescriptor.AnimLayerType.FX);
+            var componentPath = pathOf(component.transform);
+            var sourceBindings = BuildToggleBindings(component.SourceApplyConstraints, pathOf, "m_Enabled");
+            var boneBindings = BuildBoneToggleBindings(component.BoneApplyConstraints, pathOf);
+            var headChopBinding = BuildHeadChopBinding(component.BuiltHeadChop, pathOf);
 
-            var remaps = component.PendingPathRemaps;
-            foreach (var controller in controllers)
-            {
-                foreach (var clip in CollectReferencedClips(controller))
-                    ExpandClipToggles(clip, componentPath, remaps, sourceBindings, boneBindings, headChopBinding);
-            }
-        }
-
-        private static List<ConstraintToggleBinding> BuildToggleBindings(List<Behaviour> constraints, Transform avatarRoot)
-        {
-            return BuildToggleBindings(constraints, avatarRoot, null);
+            var clips = new List<VirtualClip>(services.AnimationIndex.GetClipsForObjectPath(componentPath));
+            foreach (var clip in clips)
+                ExpandClipToggles(clip, componentPath, sourceBindings, boneBindings, headChopBinding);
         }
 
         private static List<ConstraintToggleBinding> BuildToggleBindings(
             List<Behaviour> constraints,
-            Transform avatarRoot,
+            Func<Transform, string> pathOf)
+        {
+            return BuildToggleBindings(constraints, pathOf, null);
+        }
+
+        private static List<ConstraintToggleBinding> BuildToggleBindings(
+            List<Behaviour> constraints,
+            Func<Transform, string> pathOf,
             string propertyNameOverride)
         {
             var result = new List<ConstraintToggleBinding>();
@@ -890,7 +895,7 @@ namespace Samirin33.NDMF.Components.Editor
                 if (constraint == null)
                     continue;
 
-                var path = AnimationUtility.CalculateTransformPath(constraint.transform, avatarRoot);
+                var path = pathOf(constraint.transform);
                 var propertyName = string.IsNullOrEmpty(propertyNameOverride)
                     ? ResolveActivePropertyName(constraint)
                     : propertyNameOverride;
@@ -911,7 +916,7 @@ namespace Samirin33.NDMF.Components.Editor
 
         private static Dictionary<string, List<ConstraintToggleBinding>> BuildBoneToggleBindings(
             List<ControllableHumanoid.BoneApplyConstraint> constraints,
-            Transform avatarRoot)
+            Func<Transform, string> pathOf)
         {
             var result = new Dictionary<string, List<ConstraintToggleBinding>>();
             if (constraints == null)
@@ -923,20 +928,20 @@ namespace Samirin33.NDMF.Components.Editor
                     continue;
 
                 var key = ControllableHumanoid.BoneApplyPrefix + entry.bone;
-                result[key] = BuildToggleBindings(new List<Behaviour> { entry.constraint }, avatarRoot);
+                result[key] = BuildToggleBindings(new List<Behaviour> { entry.constraint }, pathOf);
             }
 
             return result;
         }
 
-        private static ConstraintToggleBinding? BuildHeadChopBinding(Behaviour headChop, Transform avatarRoot)
+        private static ConstraintToggleBinding? BuildHeadChopBinding(Behaviour headChop, Func<Transform, string> pathOf)
         {
             if (headChop == null)
                 return null;
 
             return new ConstraintToggleBinding
             {
-                path = AnimationUtility.CalculateTransformPath(headChop.transform, avatarRoot),
+                path = pathOf(headChop.transform),
                 type = typeof(VRCHeadChop),
                 propertyName = "globalScaleFactor",
             };
@@ -956,26 +961,21 @@ namespace Samirin33.NDMF.Components.Editor
         }
 
         private static void ExpandClipToggles(
-            AnimationClip clip,
+            VirtualClip clip,
             string componentPath,
-            List<ControllableHumanoid.PathRemapEntry> remaps,
             List<ConstraintToggleBinding> sourceBindings,
             Dictionary<string, List<ConstraintToggleBinding>> boneBindings,
             ConstraintToggleBinding? headChopBinding)
         {
-            if (clip == null)
+            if (clip == null || clip.IsMarkerClip)
                 return;
 
-            var bindings = AnimationUtility.GetCurveBindings(clip);
-            var changed = false;
+            var bindings = new List<EditorCurveBinding>(clip.GetFloatCurveBindings());
             foreach (var binding in bindings)
             {
                 if (binding.type != typeof(ControllableHumanoid))
                     continue;
-
-                var path = binding.path ?? string.Empty;
-                var remappedPath = RemapPath(path, remaps);
-                if (path != componentPath && remappedPath != componentPath)
+                if ((binding.path ?? string.Empty) != componentPath)
                     continue;
 
                 List<ConstraintToggleBinding> targets = null;
@@ -988,9 +988,8 @@ namespace Samirin33.NDMF.Components.Editor
                     || !boneBindings.TryGetValue(binding.propertyName, out targets))
                     continue;
 
-                var curve = AnimationUtility.GetEditorCurve(clip, binding);
-                AnimationUtility.SetEditorCurve(clip, binding, null);
-                changed = true;
+                var curve = clip.GetFloatCurve(binding);
+                clip.SetFloatCurve(binding, null);
 
                 if (curve == null)
                     continue;
@@ -998,8 +997,7 @@ namespace Samirin33.NDMF.Components.Editor
                 if (singleTarget.HasValue)
                 {
                     var target = singleTarget.Value;
-                    var updated = EditorCurveBinding.FloatCurve(target.path, target.type, target.propertyName);
-                    AnimationUtility.SetEditorCurve(clip, updated, curve);
+                    clip.SetFloatCurve(EditorCurveBinding.FloatCurve(target.path, target.type, target.propertyName), curve);
                     continue;
                 }
 
@@ -1007,155 +1005,8 @@ namespace Samirin33.NDMF.Components.Editor
                     continue;
 
                 foreach (var target in targets)
-                {
-                    var updated = EditorCurveBinding.FloatCurve(target.path, target.type, target.propertyName);
-                    AnimationUtility.SetEditorCurve(clip, updated, curve);
-                }
+                    clip.SetFloatCurve(EditorCurveBinding.FloatCurve(target.path, target.type, target.propertyName), curve);
             }
-
-            if (changed)
-                EditorUtility.SetDirty(clip);
-        }
-
-        private static HashSet<AnimationClip> CollectReferencedClips(AnimatorController controller)
-        {
-            var set = new HashSet<AnimationClip>();
-            foreach (var layer in controller.layers)
-            {
-                if (layer.stateMachine != null)
-                    CollectClipsFromStateMachine(layer.stateMachine, set);
-            }
-
-            return set;
-        }
-
-        private static void CollectClipsFromStateMachine(AnimatorStateMachine stateMachine, HashSet<AnimationClip> set)
-        {
-            if (stateMachine == null)
-                return;
-
-            foreach (var child in stateMachine.states)
-            {
-                if (child.state == null)
-                    continue;
-                CollectClipsFromMotion(child.state.motion, set);
-            }
-
-            foreach (var childSm in stateMachine.stateMachines)
-                CollectClipsFromStateMachine(childSm.stateMachine, set);
-        }
-
-        private static void CollectClipsFromMotion(Motion motion, HashSet<AnimationClip> set)
-        {
-            if (motion == null)
-                return;
-
-            if (motion is AnimationClip clip)
-            {
-                set.Add(clip);
-                return;
-            }
-
-            if (motion is BlendTree tree)
-            {
-                foreach (var child in tree.children)
-                    CollectClipsFromMotion(child.motion, set);
-            }
-        }
-
-        private static void RemapClipPaths(AnimationClip clip, List<ControllableHumanoid.PathRemapEntry> remaps)
-        {
-            if (clip == null)
-                return;
-
-            var floatBindings = AnimationUtility.GetCurveBindings(clip);
-            foreach (var binding in floatBindings)
-            {
-                var newPath = RemapPath(binding.path, remaps);
-                if (newPath == binding.path)
-                    continue;
-
-                var curve = AnimationUtility.GetEditorCurve(clip, binding);
-                AnimationUtility.SetEditorCurve(clip, binding, null);
-                var updated = binding;
-                updated.path = newPath;
-                AnimationUtility.SetEditorCurve(clip, updated, curve);
-            }
-
-            var objectBindings = AnimationUtility.GetObjectReferenceCurveBindings(clip);
-            foreach (var binding in objectBindings)
-            {
-                var newPath = RemapPath(binding.path, remaps);
-                if (newPath == binding.path)
-                    continue;
-
-                var curve = AnimationUtility.GetObjectReferenceCurve(clip, binding);
-                AnimationUtility.SetObjectReferenceCurve(clip, binding, null);
-                var updated = binding;
-                updated.path = newPath;
-                AnimationUtility.SetObjectReferenceCurve(clip, updated, curve);
-            }
-
-            EditorUtility.SetDirty(clip);
-        }
-
-        private static void CollectPlayAudios(AnimatorStateMachine stateMachine, HashSet<VRCAnimatorPlayAudio> set)
-        {
-            if (stateMachine == null)
-                return;
-
-            foreach (var behaviour in stateMachine.behaviours)
-            {
-                if (behaviour is VRCAnimatorPlayAudio playAudio)
-                    set.Add(playAudio);
-            }
-
-            foreach (var child in stateMachine.states)
-            {
-                if (child.state == null)
-                    continue;
-                foreach (var behaviour in child.state.behaviours)
-                {
-                    if (behaviour is VRCAnimatorPlayAudio playAudio)
-                        set.Add(playAudio);
-                }
-            }
-
-            foreach (var childSm in stateMachine.stateMachines)
-                CollectPlayAudios(childSm.stateMachine, set);
-        }
-
-        private static void RemapPlayAudioPath(VRCAnimatorPlayAudio playAudio, List<ControllableHumanoid.PathRemapEntry> remaps)
-        {
-            if (playAudio == null)
-                return;
-
-            var newPath = RemapPath(playAudio.SourcePath, remaps);
-            if (newPath == playAudio.SourcePath)
-                return;
-
-            playAudio.SourcePath = newPath;
-            EditorUtility.SetDirty(playAudio);
-        }
-
-        private static string RemapPath(string path, List<ControllableHumanoid.PathRemapEntry> remaps)
-        {
-            if (string.IsNullOrEmpty(path) || remaps == null)
-                return path;
-
-            foreach (var entry in remaps)
-            {
-                if (string.IsNullOrEmpty(entry.oldPath))
-                    continue;
-
-                if (path == entry.oldPath)
-                    return entry.newPath;
-
-                if (path.StartsWith(entry.oldPath + "/", StringComparison.Ordinal))
-                    return entry.newPath + path.Substring(entry.oldPath.Length);
-            }
-
-            return path;
         }
 
         #endregion

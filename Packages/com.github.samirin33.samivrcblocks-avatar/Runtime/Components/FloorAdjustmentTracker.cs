@@ -92,6 +92,23 @@ namespace Samirin33.NDMF.Components
                 : capturedLocalPosition;
         }
 
+        /// <summary>ビルド終了時に呼ぶ。破棄済みのビルド複製をキーにした状態を残さない。</summary>
+        public static void Release(GameObject avatarRoot)
+        {
+            if (avatarRoot != null)
+                States.Remove(avatarRoot);
+
+            var stale = new List<GameObject>();
+            foreach (var key in States.Keys)
+            {
+                if (key == null)
+                    stale.Add(key);
+            }
+
+            foreach (var key in stale)
+                States.Remove(key);
+        }
+
         private static bool TryGetResolved(GameObject avatarRoot, out State state)
         {
             state = null;

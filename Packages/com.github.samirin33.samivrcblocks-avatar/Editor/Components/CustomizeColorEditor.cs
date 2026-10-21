@@ -1,6 +1,5 @@
 using System.Collections.Generic;
 using UnityEditor;
-using UnityEditorInternal;
 using UnityEngine;
 using Samirin33.NDMF.Base.Editor;
 using Samirin33.NDMF.Components;
@@ -12,27 +11,20 @@ namespace Samirin33.NDMF.Components.Editor
     public class CustomizeColorEditor : SamirinMABaseEditor
     {
         const string ShowDeveloperSettingsPrefsKey = "Samirin33.CustomizeColor.ShowDeveloperSettings";
-        const string DeveloperSettingsMenuPath = "CONTEXT/CustomizeColor/開発者設定を隠す";
+        const string DeveloperSettingsMenuPath = "CONTEXT/CustomizeColor/開発者設定を表示";
 
         static bool ShowDeveloperSettings
         {
-            get => EditorPrefs.GetBool(ShowDeveloperSettingsPrefsKey, false);
-            set => EditorPrefs.SetBool(ShowDeveloperSettingsPrefsKey, value);
+            get => GetDeveloperSettingsPref(ShowDeveloperSettingsPrefsKey);
+            set => SetDeveloperSettingsPref(ShowDeveloperSettingsPrefsKey, value);
         }
 
         [MenuItem(DeveloperSettingsMenuPath, false, 1000)]
-        static void ToggleDeveloperSettings()
-        {
-            ShowDeveloperSettings = !ShowDeveloperSettings;
-            InternalEditorUtility.RepaintAllViews();
-        }
+        static void ToggleDeveloperSettings() => ToggleDeveloperSettingsPref(ShowDeveloperSettingsPrefsKey);
 
         [MenuItem(DeveloperSettingsMenuPath, true)]
-        static bool ToggleDeveloperSettingsValidate()
-        {
-            Menu.SetChecked(DeveloperSettingsMenuPath, ShowDeveloperSettings);
-            return true;
-        }
+        static bool ToggleDeveloperSettingsValidate() =>
+            ValidateDeveloperSettingsMenu(DeveloperSettingsMenuPath, ShowDeveloperSettingsPrefsKey);
 
         SerializedProperty _customInfos;
 
@@ -116,28 +108,35 @@ namespace Samirin33.NDMF.Components.Editor
                     MessageType.Info);
             }
 
-            var removeIndex = -1;
-            var moveFrom = -1;
-            var moveTo = -1;
+            var canEditArray = CanEditArrayStructure(serializedObject);
+            var pendingIndex = -1;
+            var pendingAction = ArrayRowAction.None;
 
             for (var i = 0; i < _customInfos.arraySize; i++)
             {
                 var element = _customInfos.GetArrayElementAtIndex(i);
-                DrawCustomInfo(element, i, ref removeIndex, ref moveFrom, ref moveTo);
+                var action = DrawCustomInfo(element, i, canEditArray);
+                if (action != ArrayRowAction.None)
+                {
+                    pendingIndex = i;
+                    pendingAction = action;
+                }
             }
 
-            if (removeIndex >= 0)
-                _customInfos.DeleteArrayElementAtIndex(removeIndex);
-            else if (moveFrom >= 0)
-                _customInfos.MoveArrayElement(moveFrom, moveTo);
+            ApplyArrayRowAction(_customInfos, pendingIndex, pendingAction);
 
-            if (GUILayout.Button("色を追加"))
-                AddCustomInfo();
+            using (new EditorGUI.DisabledScope(!canEditArray))
+            {
+                if (GUILayout.Button("色を追加"))
+                    AddCustomInfo();
+            }
 
             EditorGUILayout.Space(4);
             var applyRequested = GUILayout.Button("色を反映");
+            var previousChanged = GUI.changed;
             if (GUILayout.Button("開発者設定を隠す"))
                 ShowDeveloperSettings = false;
+            GUI.changed = previousChanged;
             return applyRequested;
         }
 
@@ -150,12 +149,7 @@ namespace Samirin33.NDMF.Components.Editor
             DrawUserColorControl(ColorLabel(nameProp, index), colorProp, hdrProp, inputModeProp);
         }
 
-        void DrawCustomInfo(
-            SerializedProperty element,
-            int index,
-            ref int removeIndex,
-            ref int moveFrom,
-            ref int moveTo)
+        ArrayRowAction DrawCustomInfo(SerializedProperty element, int index, bool canEditArray)
         {
             var nameProp = element.FindPropertyRelative(nameof(CustomizeColor.CustomInfo.customName));
             var colorProp = element.FindPropertyRelative(nameof(CustomizeColor.CustomInfo.customColor));
@@ -163,12 +157,12 @@ namespace Samirin33.NDMF.Components.Editor
             var inputModeProp = element.FindPropertyRelative(nameof(CustomizeColor.CustomInfo.inputMode));
             var targetsProp = element.FindPropertyRelative(nameof(CustomizeColor.CustomInfo.targets));
             var title = ColorLabel(nameProp, index);
+            var action = ArrayRowAction.None;
 
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-            element.isExpanded = EditorGUILayout.Foldout(
+            element.isExpanded = FoldoutWithoutChange(
                 element.isExpanded,
-                $"{index + 1}. {title}（反映先 {targetsProp.arraySize}）",
-                true);
+                $"{index + 1}. {title}（反映先 {targetsProp.arraySize}）");
 
             if (element.isExpanded)
             {
@@ -178,38 +172,30 @@ namespace Samirin33.NDMF.Components.Editor
                 EditorGUILayout.PropertyField(hdrProp, new GUIContent("HDR", "カラーピッカーを HDR にします。発光色向けです。"));
 
                 EditorGUILayout.Space(4);
-                DrawTargets(element, targetsProp);
+                DrawTargets(element, targetsProp, canEditArray);
 
                 EditorGUILayout.BeginHorizontal();
-                using (new EditorGUI.DisabledScope(index <= 0))
-                {
-                    if (GUILayout.Button("上へ"))
-                    {
-                        moveFrom = index;
-                        moveTo = index - 1;
-                    }
-                }
-
-                using (new EditorGUI.DisabledScope(index >= _customInfos.arraySize - 1))
-                {
-                    if (GUILayout.Button("下へ"))
-                    {
-                        moveFrom = index;
-                        moveTo = index + 1;
-                    }
-                }
-
-                if (GUILayout.Button("削除"))
-                    removeIndex = index;
-
+                action = DrawArrayRowButtons(index, _customInfos.arraySize, canEditArray, compact: false);
                 EditorGUILayout.EndHorizontal();
             }
 
             EditorGUILayout.EndVertical();
             EditorGUILayout.Space(4);
+            return action;
         }
 
-        void DrawTargets(SerializedProperty info, SerializedProperty targetsProp)
+        /// <summary>
+        /// 折りたたみの開閉は値の変更ではないので、外側の ChangeCheck（色の反映・Undo）を発火させない。
+        /// </summary>
+        static bool FoldoutWithoutChange(bool expanded, string title)
+        {
+            var previousChanged = GUI.changed;
+            var next = EditorGUILayout.Foldout(expanded, title, true);
+            GUI.changed = previousChanged;
+            return next;
+        }
+
+        void DrawTargets(SerializedProperty info, SerializedProperty targetsProp, bool canEditArray)
         {
             EditorGUILayout.LabelField("反映先");
 
@@ -220,39 +206,42 @@ namespace Samirin33.NDMF.Components.Editor
                     MessageType.Info);
             }
 
-            var removeIndex = -1;
-            var moveFrom = -1;
-            var moveTo = -1;
+            var pendingIndex = -1;
+            var pendingAction = ArrayRowAction.None;
 
             for (var i = 0; i < targetsProp.arraySize; i++)
             {
                 var element = targetsProp.GetArrayElementAtIndex(i);
-                DrawTarget(info, element, i, targetsProp.arraySize, ref removeIndex, ref moveFrom, ref moveTo);
+                var action = DrawTarget(info, element, i, targetsProp.arraySize, canEditArray);
+                if (action != ArrayRowAction.None)
+                {
+                    pendingIndex = i;
+                    pendingAction = action;
+                }
             }
 
-            if (removeIndex >= 0)
-                targetsProp.DeleteArrayElementAtIndex(removeIndex);
-            else if (moveFrom >= 0)
-                targetsProp.MoveArrayElement(moveFrom, moveTo);
+            ApplyArrayRowAction(targetsProp, pendingIndex, pendingAction);
 
-            if (GUILayout.Button("反映先を追加"))
-                AddTarget(targetsProp);
+            using (new EditorGUI.DisabledScope(!canEditArray))
+            {
+                if (GUILayout.Button("反映先を追加"))
+                    AddTarget(targetsProp);
+            }
         }
 
-        void DrawTarget(
+        ArrayRowAction DrawTarget(
             SerializedProperty info,
             SerializedProperty element,
             int index,
             int count,
-            ref int removeIndex,
-            ref int moveFrom,
-            ref int moveTo)
+            bool canEditArray)
         {
             var typeProp = element.FindPropertyRelative(nameof(CustomizeColor.ApplyTarget.type));
             var type = (CustomizeColor.TargetType)typeProp.enumValueIndex;
+            var action = ArrayRowAction.None;
 
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-            element.isExpanded = EditorGUILayout.Foldout(element.isExpanded, TargetTitle(element, type), true);
+            element.isExpanded = FoldoutWithoutChange(element.isExpanded, TargetTitle(element, type));
 
             if (element.isExpanded)
             {
@@ -271,32 +260,13 @@ namespace Samirin33.NDMF.Components.Editor
                 }
 
                 EditorGUILayout.BeginHorizontal();
-                using (new EditorGUI.DisabledScope(index <= 0))
-                {
-                    if (GUILayout.Button("上へ"))
-                    {
-                        moveFrom = index;
-                        moveTo = index - 1;
-                    }
-                }
-
-                using (new EditorGUI.DisabledScope(index >= count - 1))
-                {
-                    if (GUILayout.Button("下へ"))
-                    {
-                        moveFrom = index;
-                        moveTo = index + 1;
-                    }
-                }
-
-                if (GUILayout.Button("削除"))
-                    removeIndex = index;
-
+                action = DrawArrayRowButtons(index, count, canEditArray, compact: false);
                 EditorGUILayout.EndHorizontal();
             }
 
             EditorGUILayout.EndVertical();
             EditorGUILayout.Space(2);
+            return action;
         }
 
         void DrawMaterialTarget(SerializedProperty element)
@@ -496,7 +466,7 @@ namespace Samirin33.NDMF.Components.Editor
             if (names.Count == 0)
             {
                 EditorGUILayout.PropertyField(propertyNameProp, new GUIContent("プロパティ"));
-                DrawHelpBoxWithDefaultFontStatic("このシェーダーにカラープロパティがありません。", MessageType.Warning);
+                DrawHelpBoxWithDefaultFont("このシェーダーにカラープロパティがありません。", MessageType.Warning);
                 return;
             }
 
@@ -668,11 +638,6 @@ namespace Samirin33.NDMF.Components.Editor
             EditorGUI.showMixedValue = false;
         }
 
-        static void DrawHelpBoxWithDefaultFontStatic(string message, MessageType type)
-        {
-            Samirin33.Editor.SamirinEditorStyleHelper.DrawHelpBoxWithDefaultFont(message, type);
-        }
-
         static string ColorLabel(SerializedProperty nameProp, int index)
         {
             if (nameProp == null || nameProp.hasMultipleDifferentValues || string.IsNullOrWhiteSpace(nameProp.stringValue))
@@ -837,8 +802,9 @@ namespace Samirin33.NDMF.Components.Editor
 
         void AddCustomInfo()
         {
-            _customInfos.arraySize++;
-            var element = _customInfos.GetArrayElementAtIndex(_customInfos.arraySize - 1);
+            var index = _customInfos.arraySize;
+            _customInfos.InsertArrayElementAtIndex(index);
+            var element = _customInfos.GetArrayElementAtIndex(index);
             element.isExpanded = true;
             element.FindPropertyRelative(nameof(CustomizeColor.CustomInfo.customName)).stringValue = "色";
             element.FindPropertyRelative(nameof(CustomizeColor.CustomInfo.inputMode)).enumValueIndex =
@@ -850,8 +816,9 @@ namespace Samirin33.NDMF.Components.Editor
 
         static void AddTarget(SerializedProperty targetsProp)
         {
-            targetsProp.arraySize++;
-            var element = targetsProp.GetArrayElementAtIndex(targetsProp.arraySize - 1);
+            var index = targetsProp.arraySize;
+            targetsProp.InsertArrayElementAtIndex(index);
+            var element = targetsProp.GetArrayElementAtIndex(index);
             element.isExpanded = true;
             element.FindPropertyRelative(nameof(CustomizeColor.ApplyTarget.type)).enumValueIndex =
                 (int)CustomizeColor.TargetType.Material;

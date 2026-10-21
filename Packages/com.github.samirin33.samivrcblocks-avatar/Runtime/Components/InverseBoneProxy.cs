@@ -38,8 +38,8 @@ namespace Samirin33.NDMF.Components
             {
                 if (!InverseBoneProxyUtil.IsReferenceEmpty(targetObject))
                 {
-                    Debug.LogWarning(
-                        $"[InverseBoneProxy] Target not found: \"{targetObject?.referencePath}\" (on {name})",
+                    SamirinRuntimeReport.Warning(
+                        $"[InverseBoneProxy] 対象が見つかりません: \"{targetObject?.referencePath}\"（{name}）",
                         this);
                 }
             }
@@ -51,6 +51,7 @@ namespace Samirin33.NDMF.Components
             DestroyImmediate(this);
         }
 
+#if UNITY_EDITOR
         void LateUpdate()
         {
             if (Application.isPlaying || !editorApplyTransform)
@@ -68,5 +69,6 @@ namespace Samirin33.NDMF.Components
                 attachmentMode,
                 InverseBoneProxyUtil.SupportsBoneProxyMatchScale && matchScale);
         }
+#endif
     }
 }

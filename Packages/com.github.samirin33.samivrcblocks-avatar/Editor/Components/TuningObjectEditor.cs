@@ -1,5 +1,4 @@
 using UnityEditor;
-using UnityEditorInternal;
 using UnityEngine;
 using Samirin33.NDMF.Base.Editor;
 using Samirin33.NDMF.Components;
@@ -11,27 +10,31 @@ namespace Samirin33.NDMF.Components.Editor
     public class TuningObjectEditor : SamirinMABaseEditor
     {
         const string ShowDeveloperSettingsPrefsKey = "Samirin33.TuningObject.ShowDeveloperSettings";
-        const string DeveloperSettingsMenuPath = "CONTEXT/TuningObject/開発者設定を隠す";
+        const string DeveloperSettingsMenuPath = "CONTEXT/TuningObject/開発者設定を表示";
 
         static bool ShowDeveloperSettings
         {
-            get => EditorPrefs.GetBool(ShowDeveloperSettingsPrefsKey, false);
-            set => EditorPrefs.SetBool(ShowDeveloperSettingsPrefsKey, value);
+            get => GetDeveloperSettingsPref(ShowDeveloperSettingsPrefsKey);
+            set => SetDeveloperSettingsPref(ShowDeveloperSettingsPrefsKey, value);
         }
 
         [MenuItem(DeveloperSettingsMenuPath, false, 1000)]
         static void ToggleDeveloperSettings()
         {
-            ShowDeveloperSettings = !ShowDeveloperSettings;
-            InternalEditorUtility.RepaintAllViews();
+            ToggleDeveloperSettingsPref(ShowDeveloperSettingsPrefsKey);
         }
 
         [MenuItem(DeveloperSettingsMenuPath, true)]
         static bool ToggleDeveloperSettingsValidate()
         {
-            Menu.SetChecked(DeveloperSettingsMenuPath, ShowDeveloperSettings);
-            return true;
+            return ValidateDeveloperSettingsMenu(DeveloperSettingsMenuPath, ShowDeveloperSettingsPrefsKey);
         }
+
+        private static readonly GUIContent TargetSizeContent = new GUIContent("ターゲット数", "Target として扱う Transform の数");
+        private static readonly GUIContent TargetTransformContent = new GUIContent("Transform", "自身の Transform と Offset を適用する対象");
+        private static readonly GUIContent OffsetPositionContent = new GUIContent("位置オフセット", "Target に適用する位置のオフセット");
+        private static readonly GUIContent OffsetRotationContent = new GUIContent("回転オフセット", "Target に適用する回転のオフセット（Euler）");
+        private static readonly GUIContent OffsetScaleContent = new GUIContent("スケール倍率", "Target に適用するスケールの倍率");
 
         private SerializedProperty _active;
         private SerializedProperty _previewParticles;
@@ -99,7 +102,7 @@ namespace Samirin33.NDMF.Components.Editor
                 {
                     DrawHelpBoxWithDefaultFont(
                         "Scene ビューに矢印・球・ボックス・カプセル・テキスト・半透明メッシュを描画するチューニング用ギズモです。\n" +
-                        "Active のとき、Target に自身の Transform と Offset を適用します。適用は初回と、自身のローカル姿勢または Offset が変わったときだけで、親の移動では Target の相対位置を維持します。\n" +
+                        "有効のとき、Target に自身の Transform と Offset を適用します。適用は初回と、自身のローカル姿勢または Offset が変わったときだけで、親の移動では Target の相対位置を維持します。\n" +
                         "「最初の状態を更新」で現在の姿勢を基準にします。ユーザーに見えるのは「最初の状態にリセット」だけです。\n" +
                         "ビルド時、子が無い場合はこの GameObject を削除します。",
                         MessageType.Info);
@@ -110,8 +113,8 @@ namespace Samirin33.NDMF.Components.Editor
                 if (showDeveloperSettings)
                 {
                     EditorGUILayout.Space(6);
-                    EditorGUILayout.PropertyField(_active, new GUIContent("Active"));
-                    EditorGUILayout.PropertyField(_previewParticles, new GUIContent("Preview Particles", "TuningObject 自身の選択中のみ、Target 配下の ParticleSystem をプレビューします"));
+                    Field(_active, "有効");
+                    Field(_previewParticles, "パーティクルをプレビュー");
 
                     DrawTargetTransforms();
 
@@ -122,7 +125,7 @@ namespace Samirin33.NDMF.Components.Editor
                     EditorGUILayout.Space(4);
                     DrawCapsuleSection();
                     EditorGUILayout.Space(4);
-                    EditorGUILayout.PropertyField(_arrows, new GUIContent("Arrows"), true);
+                    EditorGUILayout.PropertyField(_arrows, new GUIContent("矢印", _arrows.tooltip), true);
                     EditorGUILayout.Space(4);
                     DrawLabelSection();
                     EditorGUILayout.Space(4);
@@ -147,6 +150,11 @@ namespace Samirin33.NDMF.Components.Editor
             });
         }
 
+        private static void Field(SerializedProperty property, string label)
+        {
+            EditorGUILayout.PropertyField(property, new GUIContent(label, property.tooltip));
+        }
+
         private void DrawResetButton()
         {
             var tuning = target as TuningObject;
@@ -166,87 +174,90 @@ namespace Samirin33.NDMF.Components.Editor
 
         private void DrawSphereSection()
         {
-            EditorGUILayout.LabelField("Center Sphere", EditorStyles.boldLabel);
-            EditorGUILayout.PropertyField(_showSphere, new GUIContent("Show Sphere"));
+            EditorGUILayout.LabelField("中心の球", EditorStyles.boldLabel);
+            Field(_showSphere, "球を表示");
             if (!_showSphere.boolValue && !_showSphere.hasMultipleDifferentValues)
                 return;
 
             EditorGUI.indentLevel++;
-            EditorGUILayout.PropertyField(_sphereRadius, new GUIContent("Sphere Radius"));
-            EditorGUILayout.PropertyField(_sphereColor, new GUIContent("Sphere Color"));
+            Field(_sphereRadius, "半径");
+            Field(_sphereColor, "色");
             EditorGUI.indentLevel--;
         }
 
         private void DrawBoxSection()
         {
-            EditorGUILayout.LabelField("Center Box", EditorStyles.boldLabel);
-            EditorGUILayout.PropertyField(_showBox, new GUIContent("Show Box"));
+            EditorGUILayout.LabelField("中心のボックス", EditorStyles.boldLabel);
+            Field(_showBox, "ボックスを表示");
             if (!_showBox.boolValue && !_showBox.hasMultipleDifferentValues)
                 return;
 
             EditorGUI.indentLevel++;
-            EditorGUILayout.PropertyField(_boxSize, new GUIContent("Box Size"));
-            EditorGUILayout.PropertyField(_boxColor, new GUIContent("Box Color"));
+            Field(_boxSize, "サイズ");
+            Field(_boxColor, "色");
             EditorGUI.indentLevel--;
         }
 
         private void DrawCapsuleSection()
         {
-            EditorGUILayout.LabelField("Center Capsule", EditorStyles.boldLabel);
-            EditorGUILayout.PropertyField(_showCapsule, new GUIContent("Show Capsule"));
+            EditorGUILayout.LabelField("中心のカプセル", EditorStyles.boldLabel);
+            Field(_showCapsule, "カプセルを表示");
             if (!_showCapsule.boolValue && !_showCapsule.hasMultipleDifferentValues)
                 return;
 
             EditorGUI.indentLevel++;
-            EditorGUILayout.PropertyField(_capsuleRadius, new GUIContent("Capsule Radius"));
-            EditorGUILayout.PropertyField(_capsuleHeight, new GUIContent("Capsule Height"));
-            EditorGUILayout.PropertyField(_capsuleDirection, new GUIContent("Capsule Direction"));
-            EditorGUILayout.PropertyField(_capsuleColor, new GUIContent("Capsule Color"));
+            Field(_capsuleRadius, "半径");
+            Field(_capsuleHeight, "高さ");
+            Field(_capsuleDirection, "向き");
+            Field(_capsuleColor, "色");
             EditorGUI.indentLevel--;
         }
 
         private void DrawLabelSection()
         {
-            EditorGUILayout.LabelField("Label", EditorStyles.boldLabel);
-            EditorGUILayout.PropertyField(_showLabel, new GUIContent("Show Label"));
+            EditorGUILayout.LabelField("テキスト", EditorStyles.boldLabel);
+            Field(_showLabel, "テキストを表示");
             if (!_showLabel.boolValue && !_showLabel.hasMultipleDifferentValues)
                 return;
 
             EditorGUI.indentLevel++;
-            EditorGUILayout.PropertyField(_labelText, new GUIContent("Label Text"));
-            EditorGUILayout.PropertyField(_labelColor, new GUIContent("Label Color"));
-            EditorGUILayout.PropertyField(_labelOffset, new GUIContent("Label Offset"));
+            Field(_labelText, "内容");
+            Field(_labelColor, "色");
+            Field(_labelOffset, "オフセット");
             EditorGUI.indentLevel--;
         }
 
         private void DrawMeshSection()
         {
-            EditorGUILayout.LabelField("Preview Mesh", EditorStyles.boldLabel);
-            EditorGUILayout.PropertyField(_showMesh, new GUIContent("Show Mesh"));
+            EditorGUILayout.LabelField("プレビューメッシュ", EditorStyles.boldLabel);
+            Field(_showMesh, "メッシュを表示");
             if (!_showMesh.boolValue && !_showMesh.hasMultipleDifferentValues)
                 return;
 
             EditorGUI.indentLevel++;
-            EditorGUILayout.PropertyField(_previewMesh, new GUIContent("Preview Mesh"));
-            EditorGUILayout.PropertyField(_meshColor, new GUIContent("Mesh Color"));
-            EditorGUILayout.PropertyField(_meshOffset, new GUIContent("Mesh Offset"));
-            EditorGUILayout.PropertyField(_meshRotation, new GUIContent("Mesh Rotation"));
-            EditorGUILayout.PropertyField(_meshScale, new GUIContent("Mesh Scale"));
+            Field(_previewMesh, "メッシュ");
+            Field(_meshColor, "色");
+            Field(_meshOffset, "位置オフセット");
+            Field(_meshRotation, "回転");
+            Field(_meshScale, "スケール");
             EditorGUI.indentLevel--;
         }
 
         private void DrawTargetTransforms()
         {
-            EditorGUILayout.LabelField("Target Transforms", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("ターゲット", EditorStyles.boldLabel);
 
             if (_targetTransforms.hasMultipleDifferentValues)
             {
-                EditorGUILayout.PropertyField(_targetTransforms, true);
+                EditorGUILayout.PropertyField(_targetTransforms, new GUIContent("ターゲット"), true);
                 return;
             }
 
             EditorGUI.indentLevel++;
-            _targetTransforms.arraySize = EditorGUILayout.IntField("Size", _targetTransforms.arraySize);
+            EditorGUI.BeginChangeCheck();
+            var size = EditorGUILayout.DelayedIntField(TargetSizeContent, _targetTransforms.arraySize);
+            if (EditorGUI.EndChangeCheck())
+                _targetTransforms.arraySize = Mathf.Max(0, size);
             EditorGUI.indentLevel--;
 
             var showButtons = !_active.boolValue && !serializedObject.isEditingMultipleObjects;
@@ -255,7 +266,7 @@ namespace Samirin33.NDMF.Components.Editor
             {
                 var element = _targetTransforms.GetArrayElementAtIndex(i);
                 EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-                EditorGUILayout.PropertyField(element, new GUIContent($"Element {i}"), true);
+                DrawTargetElement(element, i);
 
                 if (showButtons)
                 {
@@ -289,6 +300,27 @@ namespace Samirin33.NDMF.Components.Editor
 
                 EditorGUILayout.EndVertical();
             }
+        }
+
+        private static void DrawTargetElement(SerializedProperty element, int index)
+        {
+            element.isExpanded = EditorGUILayout.Foldout(element.isExpanded, $"ターゲット {index}", true);
+            if (!element.isExpanded)
+                return;
+
+            EditorGUI.indentLevel++;
+            DrawRelative(element, nameof(TuningObject.TargetTransform.transform), TargetTransformContent);
+            DrawRelative(element, nameof(TuningObject.TargetTransform.offsetPosition), OffsetPositionContent);
+            DrawRelative(element, nameof(TuningObject.TargetTransform.offsetRotation), OffsetRotationContent);
+            DrawRelative(element, nameof(TuningObject.TargetTransform.offsetScale), OffsetScaleContent);
+            EditorGUI.indentLevel--;
+        }
+
+        private static void DrawRelative(SerializedProperty parent, string name, GUIContent label)
+        {
+            var property = parent.FindPropertyRelative(name);
+            if (property != null)
+                EditorGUILayout.PropertyField(property, label);
         }
 
         private static bool HasTargetTransform(SerializedProperty element)

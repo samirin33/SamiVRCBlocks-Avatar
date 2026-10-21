@@ -4,15 +4,15 @@ using System.Text;
 using UnityEngine;
 using Samirin33.NDMF.Base;
 
-#if UNITY_EDITOR
-using UnityEditor;
-#endif
-
 namespace Samirin33.NDMF.Components
 {
+    /// <summary>
+    /// 同じ id を持つオブジェクトがアバター内に複数あるとき、Transforming（MA 前）で 2 つ目以降を削除し、警告を出す。
+    /// </summary>
     [AddComponentMenu("SamiVRCBlocks-Avatar/SB PreventDuplicateObjects")]
     public class PreventDuplicateObjects : SamirinMABaseSingle
     {
+        [Tooltip("重複判定に使う ID。同じ ID のオブジェクトはアバター内に 1 つだけ残す")]
         public string id;
 
         public override void OnBuildSingle(
@@ -58,20 +58,14 @@ namespace Samirin33.NDMF.Components
                 var objectName = group[0].gameObject.name;
                 var hierarchyList = BuildHierarchyList(group, avatarRootTransform);
 
-#if UNITY_EDITOR
-                EditorUtility.DisplayDialog(
-                    "PreventDuplicateObjects",
-                    $"{objectName}がアバター内で重複しています！ビルド結果が意図しないものになる可能性があるので{objectName}をアバター内で1つだけ存在するようにしてください。\n\n重複している階層:\n{hierarchyList}",
-                    "閉じる");
-#endif
+                // ビルド中（アップロード・Play 時・CI）にモーダルダイアログでブロックしないよう、
+                // NDMF のエラーレポートへ警告として出し、ビルドは続行する。
+                SamirinRuntimeReport.Warning(
+                    $"[PreventDuplicateObjects] {objectName} がアバター内で重複しています。ビルド結果が意図しないものになる可能性があるので、{objectName} をアバター内で1つだけ存在するようにしてください。2つ目以降はビルド時に削除しました。\n\n重複している階層:\n{hierarchyList}",
+                    group[0]);
 
                 foreach (var duplicate in group.Skip(1))
-                {
-                    Debug.LogWarning(
-                        $"[PreventDuplicateObjects] Removed duplicate GameObject \"{duplicate.gameObject.name}\" with id \"{duplicate.id}\" at \"{GetRelativePath(duplicate.transform, avatarRootTransform)}\"",
-                        duplicate);
                     Object.DestroyImmediate(duplicate.gameObject);
-                }
             }
 
             foreach (var component in components)

@@ -1,7 +1,6 @@
 using System.Collections.Generic;
 using nadena.dev.modular_avatar.core;
 using UnityEditor;
-using UnityEditorInternal;
 using UnityEngine;
 using Samirin33.NDMF.Base.Editor;
 using Samirin33.NDMF.Components;
@@ -13,7 +12,7 @@ namespace Samirin33.NDMF.Components.Editor
     public class DominantHandOptionEditor : SamirinMABaseEditor
     {
         const string ShowDeveloperSettingsPrefsKey = "Samirin33.DominantHandOption.ShowDeveloperSettings";
-        const string DeveloperSettingsMenuPath = "CONTEXT/DominantHandOption/開発者設定を隠す";
+        const string DeveloperSettingsMenuPath = "CONTEXT/DominantHandOption/開発者設定を表示";
 
         static readonly string[] HandLabels = { "左手", "右手" };
         static readonly int[] HandValues =
@@ -24,23 +23,16 @@ namespace Samirin33.NDMF.Components.Editor
 
         static bool ShowDeveloperSettings
         {
-            get => EditorPrefs.GetBool(ShowDeveloperSettingsPrefsKey, false);
-            set => EditorPrefs.SetBool(ShowDeveloperSettingsPrefsKey, value);
+            get => GetDeveloperSettingsPref(ShowDeveloperSettingsPrefsKey);
+            set => SetDeveloperSettingsPref(ShowDeveloperSettingsPrefsKey, value);
         }
 
         [MenuItem(DeveloperSettingsMenuPath, false, 1000)]
-        static void ToggleDeveloperSettings()
-        {
-            ShowDeveloperSettings = !ShowDeveloperSettings;
-            InternalEditorUtility.RepaintAllViews();
-        }
+        static void ToggleDeveloperSettings() => ToggleDeveloperSettingsPref(ShowDeveloperSettingsPrefsKey);
 
         [MenuItem(DeveloperSettingsMenuPath, true)]
-        static bool ToggleDeveloperSettingsValidate()
-        {
-            Menu.SetChecked(DeveloperSettingsMenuPath, ShowDeveloperSettings);
-            return true;
-        }
+        static bool ToggleDeveloperSettingsValidate() =>
+            ValidateDeveloperSettingsMenu(DeveloperSettingsMenuPath, ShowDeveloperSettingsPrefsKey);
 
         SerializedProperty _dominantHand;
         SerializedProperty _entries;
@@ -138,35 +130,36 @@ namespace Samirin33.NDMF.Components.Editor
                     MessageType.Info);
             }
 
-            var removeIndex = -1;
-            var moveFrom = -1;
-            var moveTo = -1;
+            var canEditArray = CanEditArrayStructure(serializedObject);
+            var pendingIndex = -1;
+            var pendingAction = ArrayRowAction.None;
 
             for (var i = 0; i < _entries.arraySize; i++)
             {
                 var element = _entries.GetArrayElementAtIndex(i);
-                DrawEntry(element, i, ref removeIndex, ref moveFrom, ref moveTo);
+                var action = DrawEntry(element, i, canEditArray);
+                if (action != ArrayRowAction.None)
+                {
+                    pendingIndex = i;
+                    pendingAction = action;
+                }
             }
 
-            if (removeIndex >= 0)
-                _entries.DeleteArrayElementAtIndex(removeIndex);
-            else if (moveFrom >= 0)
-                _entries.MoveArrayElement(moveFrom, moveTo);
+            ApplyArrayRowAction(_entries, pendingIndex, pendingAction);
 
-            if (GUILayout.Button("指定を追加"))
-                AddEntry();
+            using (new EditorGUI.DisabledScope(!canEditArray))
+            {
+                if (GUILayout.Button("指定を追加"))
+                    AddEntry();
+            }
         }
 
-        void DrawEntry(
-            SerializedProperty element,
-            int index,
-            ref int removeIndex,
-            ref int moveFrom,
-            ref int moveTo)
+        ArrayRowAction DrawEntry(SerializedProperty element, int index, bool canEditArray)
         {
             var typeProp = element.FindPropertyRelative(nameof(DominantHandOption.Entry.type));
             var type = (DominantHandOption.EntryType)typeProp.enumValueIndex;
             var typeName = TypeName(type);
+            var action = ArrayRowAction.None;
 
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
             element.isExpanded = EditorGUILayout.Foldout(element.isExpanded, $"{index + 1}. {typeName}", true);
@@ -189,32 +182,13 @@ namespace Samirin33.NDMF.Components.Editor
                 }
 
                 EditorGUILayout.BeginHorizontal();
-                using (new EditorGUI.DisabledScope(index <= 0))
-                {
-                    if (GUILayout.Button("上へ"))
-                    {
-                        moveFrom = index;
-                        moveTo = index - 1;
-                    }
-                }
-
-                using (new EditorGUI.DisabledScope(index >= _entries.arraySize - 1))
-                {
-                    if (GUILayout.Button("下へ"))
-                    {
-                        moveFrom = index;
-                        moveTo = index + 1;
-                    }
-                }
-
-                if (GUILayout.Button("削除"))
-                    removeIndex = index;
-
+                action = DrawArrayRowButtons(index, _entries.arraySize, canEditArray, compact: false);
                 EditorGUILayout.EndHorizontal();
             }
 
             EditorGUILayout.EndVertical();
             EditorGUILayout.Space(4);
+            return action;
         }
 
         void DrawBoneProxyFields(SerializedProperty element)
@@ -345,8 +319,9 @@ namespace Samirin33.NDMF.Components.Editor
 
         void AddEntry()
         {
-            _entries.arraySize++;
-            var element = _entries.GetArrayElementAtIndex(_entries.arraySize - 1);
+            var index = _entries.arraySize;
+            _entries.InsertArrayElementAtIndex(index);
+            var element = _entries.GetArrayElementAtIndex(index);
             element.isExpanded = true;
             element.FindPropertyRelative(nameof(DominantHandOption.Entry.type)).enumValueIndex =
                 (int)DominantHandOption.EntryType.BoneProxy;

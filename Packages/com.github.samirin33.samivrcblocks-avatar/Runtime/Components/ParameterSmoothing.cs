@@ -42,10 +42,8 @@ namespace Samirin33.NDMF.Components
 
         public override void OnBuildSingle(SamirinBuildPhase buildPhase, bool beforeModularAvatar, SamirinMABaseSingle[] _MAScripts, GameObject avatarRootObject, Action<GameObject, SamirinMABaseSingle[]> invokeBuilder, Action<GameObject, SamirinMABaseSingle[]> invokeReplaceBuilder)
         {
-            // Resolving: アバター上に直接置かれたもの
-            // Transforming: ExtendedParameters が配置したプレファブ内のもの（ExtendedParameters より後のフェーズ）
-            if ((buildPhase != SamirinBuildPhase.Resolving && buildPhase != SamirinBuildPhase.Transforming)
-                || !beforeModularAvatar)
+            // ExtendedParameters が配置したプレファブ内のものも、同じ Resolving のループで再走査されて処理される。
+            if (buildPhase != SamirinBuildPhase.Resolving || !beforeModularAvatar)
                 return;
 
             invokeBuilder(avatarRootObject, _MAScripts);

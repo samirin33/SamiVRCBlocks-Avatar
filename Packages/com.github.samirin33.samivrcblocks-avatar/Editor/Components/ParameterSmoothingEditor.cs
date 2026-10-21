@@ -1,7 +1,5 @@
-using System.Linq;
 using UnityEditor;
 using UnityEngine;
-using VRC.SDK3.Avatars.Components;
 using Samirin33.NDMF.Base.Editor;
 using Samirin33.NDMF.Components;
 
@@ -26,7 +24,7 @@ namespace Samirin33.NDMF.Components.Editor
             {
                 serializedObject.Update();
 
-                EditorGUILayout.HelpBox(
+                DrawHelpBoxWithDefaultFont(
                     "FloatパラメーターにAAPスムージングをかけることができます！",
                     MessageType.Info);
 
@@ -40,6 +38,10 @@ namespace Samirin33.NDMF.Components.Editor
 
                 if (_parameterSmoothingData != null)
                 {
+                    var canEditArray = CanEditArrayStructure(serializedObject);
+                    var pendingIndex = -1;
+                    var pendingAction = ArrayRowAction.None;
+
                     for (int i = 0; i < _parameterSmoothingData.arraySize; i++)
                     {
                         var element = _parameterSmoothingData.GetArrayElementAtIndex(i);
@@ -53,32 +55,13 @@ namespace Samirin33.NDMF.Components.Editor
                         EditorGUILayout.BeginVertical(EditorStyles.helpBox, GUILayout.ExpandWidth(true));
 
                         EditorGUILayout.BeginHorizontal();
-                        EditorGUILayout.LabelField(parameterNameProp.stringValue);
+                        EditorGUILayout.LabelField(parameterNameProp.hasMultipleDifferentValues ? "—" : parameterNameProp.stringValue);
                         GUILayout.FlexibleSpace();
-                        EditorGUI.BeginDisabledGroup(i == 0);
-                        if (GUILayout.Button("↑", GUILayout.Width(24)))
+                        var action = DrawArrayRowButtons(i, _parameterSmoothingData.arraySize, canEditArray);
+                        if (action != ArrayRowAction.None)
                         {
-                            _parameterSmoothingData.MoveArrayElement(i, i - 1);
-                            EditorGUILayout.EndHorizontal();
-                            EditorGUILayout.EndVertical();
-                            break;
-                        }
-                        EditorGUI.EndDisabledGroup();
-                        EditorGUI.BeginDisabledGroup(i == _parameterSmoothingData.arraySize - 1);
-                        if (GUILayout.Button("↓", GUILayout.Width(24)))
-                        {
-                            _parameterSmoothingData.MoveArrayElement(i, i + 1);
-                            EditorGUILayout.EndHorizontal();
-                            EditorGUILayout.EndVertical();
-                            break;
-                        }
-                        EditorGUI.EndDisabledGroup();
-                        if (GUILayout.Button("削除", GUILayout.Width(50)))
-                        {
-                            _parameterSmoothingData.DeleteArrayElementAtIndex(i);
-                            EditorGUILayout.EndHorizontal();
-                            EditorGUILayout.EndVertical();
-                            break;
+                            pendingIndex = i;
+                            pendingAction = action;
                         }
                         EditorGUILayout.EndHorizontal();
 
@@ -91,7 +74,7 @@ namespace Samirin33.NDMF.Components.Editor
                             if (EditorGUI.EndChangeCheck() && !useDefaultProp.boolValue && _defaultSmoothWeight != null)
                                 smoothWeightProp.floatValue = _defaultSmoothWeight.floatValue;
 
-                            if (!useDefaultProp.boolValue)
+                            if (!useDefaultProp.boolValue || useDefaultProp.hasMultipleDifferentValues)
                                 DrawSmoothWeightField(smoothWeightProp);
                         }
                         else
@@ -102,11 +85,11 @@ namespace Samirin33.NDMF.Components.Editor
                         DrawClampRangeFields(specifyClampRangeProp, clampMinProp, clampMaxProp);
 
                         var paramName = parameterNameProp.stringValue;
-                        if (!string.IsNullOrEmpty(paramName))
+                        if (!parameterNameProp.hasMultipleDifferentValues && !string.IsNullOrEmpty(paramName))
                         {
                             var smoothedName = $"{paramName}_Smoothed";
 
-                            EditorGUILayout.HelpBox(
+                            DrawHelpBoxWithDefaultFont(
                                 "以下のパラメータが出力されます。",
                                 MessageType.None);
 
@@ -121,31 +104,12 @@ namespace Samirin33.NDMF.Components.Editor
                         EditorGUILayout.Space(3);
                     }
 
-                    if (GUILayout.Button("+ 追加"))
+                    ApplyArrayRowAction(_parameterSmoothingData, pendingIndex, pendingAction);
+
+                    using (new EditorGUI.DisabledScope(!canEditArray))
                     {
-                        _parameterSmoothingData.arraySize++;
-                        var newElement = _parameterSmoothingData.GetArrayElementAtIndex(_parameterSmoothingData.arraySize - 1);
-                        var useDefaultProp = newElement.FindPropertyRelative("useDefaultSmoothWeight");
-                        if (useDefaultProp != null)
-                            useDefaultProp.boolValue = true;
-                        var smoothWeightProp = newElement.FindPropertyRelative("smoothWeight");
-                        if (smoothWeightProp != null && _defaultSmoothWeight != null)
-                            smoothWeightProp.floatValue = _defaultSmoothWeight.floatValue;
-                        var parameterNameProp = newElement.FindPropertyRelative("parameterName");
-                        if (parameterNameProp != null)
-                            parameterNameProp.stringValue = "";
-                        var smoothedNameProp = newElement.FindPropertyRelative("smoothedParameterName");
-                        if (smoothedNameProp != null)
-                            smoothedNameProp.stringValue = "";
-                        var specifyClampRangeProp = newElement.FindPropertyRelative("specifyClampRange");
-                        if (specifyClampRangeProp != null)
-                            specifyClampRangeProp.boolValue = false;
-                        var clampMinProp = newElement.FindPropertyRelative("clampMin");
-                        if (clampMinProp != null)
-                            clampMinProp.floatValue = 0f;
-                        var clampMaxProp = newElement.FindPropertyRelative("clampMax");
-                        if (clampMaxProp != null)
-                            clampMaxProp.floatValue = 1f;
+                        if (GUILayout.Button("+ 追加"))
+                            AddElement();
                     }
                 }
                 EditorGUILayout.EndVertical();
@@ -162,6 +126,34 @@ namespace Samirin33.NDMF.Components.Editor
 
                 serializedObject.ApplyModifiedProperties();
             });
+        }
+
+        private void AddElement()
+        {
+            var index = _parameterSmoothingData.arraySize;
+            _parameterSmoothingData.InsertArrayElementAtIndex(index);
+            var newElement = _parameterSmoothingData.GetArrayElementAtIndex(index);
+            var useDefaultProp = newElement.FindPropertyRelative("useDefaultSmoothWeight");
+            if (useDefaultProp != null)
+                useDefaultProp.boolValue = true;
+            var smoothWeightProp = newElement.FindPropertyRelative("smoothWeight");
+            if (smoothWeightProp != null && _defaultSmoothWeight != null)
+                smoothWeightProp.floatValue = _defaultSmoothWeight.floatValue;
+            var parameterNameProp = newElement.FindPropertyRelative("parameterName");
+            if (parameterNameProp != null)
+                parameterNameProp.stringValue = "";
+            var smoothedNameProp = newElement.FindPropertyRelative("smoothedParameterName");
+            if (smoothedNameProp != null)
+                smoothedNameProp.stringValue = "";
+            var specifyClampRangeProp = newElement.FindPropertyRelative("specifyClampRange");
+            if (specifyClampRangeProp != null)
+                specifyClampRangeProp.boolValue = false;
+            var clampMinProp = newElement.FindPropertyRelative("clampMin");
+            if (clampMinProp != null)
+                clampMinProp.floatValue = 0f;
+            var clampMaxProp = newElement.FindPropertyRelative("clampMax");
+            if (clampMaxProp != null)
+                clampMaxProp.floatValue = 1f;
         }
 
         private static void DrawClampRangeFields(
@@ -184,7 +176,7 @@ namespace Samirin33.NDMF.Components.Editor
                 clampMaxProp.floatValue = 1f;
             }
 
-            if (!specifyClampRangeProp.boolValue)
+            if (!specifyClampRangeProp.boolValue && !specifyClampRangeProp.hasMultipleDifferentValues)
                 return;
 
             var rect = EditorGUILayout.GetControlRect();
@@ -198,66 +190,40 @@ namespace Samirin33.NDMF.Components.Editor
             var maxRect = new Rect(fieldsX + half + gap, rect.y, half, rect.height);
 
             var previousLabelWidth = EditorGUIUtility.labelWidth;
+            var previousIndent = EditorGUI.indentLevel;
             EditorGUIUtility.labelWidth = 36f;
-            clampMinProp.floatValue = EditorGUI.FloatField(minRect, "最小", clampMinProp.floatValue);
-            clampMaxProp.floatValue = EditorGUI.FloatField(maxRect, "最大", clampMaxProp.floatValue);
+            EditorGUI.indentLevel = 0;
+            DrawFloatFieldInRect(minRect, "最小", clampMinProp);
+            DrawFloatFieldInRect(maxRect, "最大", clampMaxProp);
+            EditorGUI.indentLevel = previousIndent;
             EditorGUIUtility.labelWidth = previousLabelWidth;
 
-            if (clampMinProp.floatValue >= clampMaxProp.floatValue)
-                EditorGUILayout.HelpBox("最小値は最大値より小さくしてください。", MessageType.Warning);
+            if (!clampMinProp.hasMultipleDifferentValues
+                && !clampMaxProp.hasMultipleDifferentValues
+                && clampMinProp.floatValue >= clampMaxProp.floatValue)
+                DrawHelpBoxWithDefaultFont("最小値は最大値より小さくしてください。", MessageType.Warning);
+        }
+
+        private static void DrawFloatFieldInRect(Rect rect, string label, SerializedProperty property)
+        {
+            var content = new GUIContent(label);
+            content = EditorGUI.BeginProperty(rect, content, property);
+            EditorGUI.showMixedValue = property.hasMultipleDifferentValues;
+            EditorGUI.BeginChangeCheck();
+            var value = EditorGUI.FloatField(rect, content, property.floatValue);
+            if (EditorGUI.EndChangeCheck())
+                property.floatValue = value;
+            EditorGUI.showMixedValue = false;
+            EditorGUI.EndProperty();
         }
 
         private void ManualGenerateAnimator()
         {
-            var selected = targets.OfType<ParameterSmoothing>().Where(c => c != null).ToArray();
-            if (selected.Length == 0)
-                return;
-
-            var avatarRoot = FindAvatarRoot(selected[0].transform);
-            if (avatarRoot == null)
-            {
-                EditorUtility.DisplayDialog(
-                    "ParameterSmoothing",
-                    "親階層に VRCAvatarDescriptor が見つかりません。アバター配下に配置してから実行してください。",
-                    "OK");
-                return;
-            }
-
-            var all = avatarRoot.GetComponentsInChildren<ParameterSmoothing>(true);
-            Undo.RegisterCompleteObjectUndo(all.Cast<Object>().ToArray(), "Manual Generate ParameterSmoothing Animator");
-
-            var controllers = ParameterSmoothingBuilder.BuildManual(avatarRoot, all);
-            AssetDatabase.SaveAssets();
-            AssetDatabase.Refresh();
-            SelectGeneratedAnimators(controllers);
-
-            // EditorUtility.DisplayDialog(
-            //     "ParameterSmoothing",
-            //     "Animator を生成しました。\n（ResizableSyncParameters の Float と同居している場合は、そちら側の生成に含まれます）",
-            //     "OK");
-        }
-
-        private static void SelectGeneratedAnimators(UnityEditor.Animations.AnimatorController[] controllers)
-        {
-            var objects = controllers?.Where(c => c != null).Cast<Object>().ToArray();
-            if (objects == null || objects.Length == 0)
-                return;
-
-            Selection.objects = objects;
-            EditorGUIUtility.PingObject(objects[0]);
-        }
-
-        private static GameObject FindAvatarRoot(Transform start)
-        {
-            var current = start;
-            while (current != null)
-            {
-                if (current.GetComponent<VRCAvatarDescriptor>() != null)
-                    return current.gameObject;
-                current = current.parent;
-            }
-
-            return null;
+            ManualGenerateAnimatorsPerAvatar<ParameterSmoothing>(
+                targets,
+                "ParameterSmoothing",
+                "Manual Generate ParameterSmoothing Animator",
+                (avatarRoot, all) => ParameterSmoothingBuilder.BuildManual(avatarRoot, all));
         }
     }
 }

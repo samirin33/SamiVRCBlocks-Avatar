@@ -17,17 +17,12 @@ namespace Samirin33.NDMF.Components.Editor
         private SerializedProperty _tipVector;
         private SerializedProperty _upVector;
 
+        // 選択しただけで Transform を書き換えないよう、OnEnable では回転を適用しない
         private void OnEnable()
         {
             _handType = serializedObject.FindProperty(nameof(FixHandVector.handType));
             _tipVector = serializedObject.FindProperty(nameof(FixHandVector.TipVector));
             _upVector = serializedObject.FindProperty(nameof(FixHandVector.UpVector));
-
-            foreach (var t in targets)
-            {
-                if (t is FixHandVector fix)
-                    FixHandVectorApplier.ScheduleApply(fix);
-            }
         }
 
         public override void OnInspectorGUI()
@@ -37,33 +32,31 @@ namespace Samirin33.NDMF.Components.Editor
                 serializedObject.Update();
 
                 EditorGUI.BeginChangeCheck();
-                EditorGUILayout.PropertyField(_handType, new GUIContent("Hand Type"));
-                EditorGUILayout.PropertyField(_tipVector, new GUIContent("Tip Vector"));
-                EditorGUILayout.PropertyField(_upVector, new GUIContent("Up Vector"));
-                if (EditorGUI.EndChangeCheck())
-                {
-                    serializedObject.ApplyModifiedProperties();
-                    foreach (var t in targets)
-                    {
-                        if (t is FixHandVector fix)
-                            FixHandVectorApplier.ScheduleApply(fix);
-                    }
-                }
-                else
-                {
-                    serializedObject.ApplyModifiedProperties();
-                }
+                EditorGUILayout.PropertyField(_handType, new GUIContent("手の種類", "どちらの手の向きに合わせるか"));
+                EditorGUILayout.PropertyField(_tipVector, new GUIContent("指先方向", "このオブジェクトのローカル空間で、指先側を向く軸"));
+                EditorGUILayout.PropertyField(_upVector, new GUIContent("上方向", "このオブジェクトのローカル空間で、手の上方向に合わせる軸"));
+                var changed = EditorGUI.EndChangeCheck();
+                serializedObject.ApplyModifiedProperties();
+
+                if (changed)
+                    ApplyToTargets("Fix Hand Vector を変更");
 
                 EditorGUILayout.Space(8);
                 if (GUILayout.Button("手の向きに合わせて回転を再適用"))
-                {
-                    foreach (var t in targets)
-                    {
-                        if (t is FixHandVector fix)
-                            FixHandVectorApplier.ApplyNow(fix, recordUndo: true);
-                    }
-                }
+                    ApplyToTargets("Fix Hand Vector の回転を再適用");
             });
+        }
+
+        private void ApplyToTargets(string undoName)
+        {
+            var group = Undo.GetCurrentGroup();
+            foreach (var t in targets)
+            {
+                if (t is FixHandVector fix)
+                    FixHandVectorApplier.ApplyNow(fix, recordUndo: true);
+            }
+            Undo.SetCurrentGroupName(undoName);
+            Undo.CollapseUndoOperations(group);
         }
     }
 
@@ -173,12 +166,13 @@ namespace Samirin33.NDMF.Components.Editor
             if (!IsFinite(targetRot)) return;
             if (Quaternion.Angle(fix.transform.rotation, targetRot) < 0.01f) return;
 
-            // 自動適用では Undo を使わない（Inspector 描画中の SerializedProperty 破壊を避ける）
+            // 階層変更イベントからの自動適用では Undo を積まない（Undo/Redo 自体が階層変更イベントを発火し、Redo 履歴を消してしまうため）
             if (recordUndo)
                 Undo.RecordObject(fix.transform, "Fix Hand Vector Rotation");
 
             fix.transform.rotation = targetRot;
             EditorUtility.SetDirty(fix.transform);
+            PrefabUtility.RecordPrefabInstancePropertyModifications(fix.transform);
         }
 
         private static bool CanApplyInEditor()

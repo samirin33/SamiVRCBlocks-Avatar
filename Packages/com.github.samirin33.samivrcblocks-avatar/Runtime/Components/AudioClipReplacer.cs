@@ -9,7 +9,7 @@ namespace Samirin33.NDMF.Components
 {
     public enum AudioClipReplacerMode
     {
-        [Tooltip("Merge Animator に付いている Animator の Controller を複製・差し替え")]
+        [Tooltip("Merge Animator の Animator Controller を複製・差し替え")]
         Direct,
 
         [Tooltip("Avatar Descriptor の Playable Layer から取得・置き換え")]
@@ -58,13 +58,18 @@ namespace Samirin33.NDMF.Components
         public float delayInSeconds;
     }
 
+    /// <summary>
+    /// VRC Animator Play Audio や AudioSource の音源・音量・ピッチをビルド時に差し替える。
+    /// Resolving（MA より前）で複製元 Controller をメモリ上に複製して書き換え、
+    /// Direct は対象の Merge Animator、PlayableLayer は Avatar Descriptor のレイヤーにだけ割り当てる。
+    /// </summary>
     [DisallowMultipleComponent]
     [AddComponentMenu("SamiVRCBlocks-Avatar/SB AudioClipReplacer")]
     public class AudioClipReplacer : SamirinMABase
     {
         public AudioClipReplacerMode mode = AudioClipReplacerMode.Direct;
 
-        [Tooltip("Direct モードでは Merge Animator と同じ GameObject の Animator から自動取得（表示用）")]
+        [Tooltip("Direct モードでは Merge Animator の Animator 欄（未設定なら同じ GameObject の Animator）から自動取得（表示用）")]
         public RuntimeAnimatorController sourceController;
 
         [Tooltip("生成した AnimatorController を割り当てる MA Merge Animator")]
@@ -95,18 +100,18 @@ namespace Samirin33.NDMF.Components
         }
 
         /// <summary>
-        /// Direct モード時、Merge Animator と同じ GameObject の Animator.runtimeAnimatorController を sourceController に反映する。
+        /// Direct モード時、Merge Animator の Animator 欄（未設定なら同じ GameObject の Animator）の Controller を sourceController に反映する。
         /// </summary>
         public void SyncSourceControllerFromMergeAnimator()
         {
             if (mode != AudioClipReplacerMode.Direct || mergeAnimator == null)
                 return;
 
-            var animator = mergeAnimator.GetComponent<Animator>();
-            if (animator == null)
+            var controller = AudioClipReplacerUtil.GetMergeAnimatorSource(mergeAnimator);
+            if (controller == null)
                 return;
 
-            sourceController = animator.runtimeAnimatorController;
+            sourceController = controller;
         }
 #endif
     }

@@ -5,6 +5,7 @@ using Samirin33.NDMF.Base;
 
 #if UNITY_EDITOR
 using UnityEditor;
+using UnityEditor.SceneManagement;
 #endif
 
 namespace Samirin33.NDMF.Components
@@ -117,12 +118,14 @@ namespace Samirin33.NDMF.Components
         }
 
         /// <summary>
-        /// エディタ上で見た目へ反映する。マテリアルは本体を変えず、パーティクルの色はシーンへ書き込む。
+        /// エディタ上で見た目へ反映する。マテリアルは本体を変えず MaterialPropertyBlock で、
+        /// パーティクルは元の色を覚えたうえで書き換え、無効化・保存時に元へ戻す。
         /// </summary>
         public void ApplyPreview()
         {
 #if UNITY_EDITOR
             ClearMaterialPreview();
+            ClearParticlePreview();
             Apply(bakeMaterials: false, logWarnings: false);
 #endif
         }
@@ -240,7 +243,7 @@ namespace Samirin33.NDMF.Components
                     if (target.type == TargetType.Material)
                         ApplyMaterial(target, color, bakedMaterials, logWarnings, label);
                     else
-                        ApplyParticle(target, color, logWarnings, label);
+                        ApplyParticle(target, color, preview: !bakeMaterials, logWarnings, label);
                 }
             }
         }
@@ -256,7 +259,7 @@ namespace Samirin33.NDMF.Components
             if (renderer == null)
             {
                 if (logWarnings)
-                    Debug.LogWarning($"[CustomizeColor] Renderer が未設定です。({label})", this);
+                    SamirinRuntimeReport.Warning($"[CustomizeColor] Renderer が未設定です。({label})", this);
                 return;
             }
 
@@ -264,7 +267,7 @@ namespace Samirin33.NDMF.Components
             if (materials == null || target.materialSlot < 0 || target.materialSlot >= materials.Length)
             {
                 if (logWarnings)
-                    Debug.LogWarning($"[CustomizeColor] マテリアルスロットが範囲外です。({label})", this);
+                    SamirinRuntimeReport.Warning($"[CustomizeColor] マテリアルスロットが範囲外です。({label})", this);
                 return;
             }
 
@@ -272,7 +275,7 @@ namespace Samirin33.NDMF.Components
             if (source == null)
             {
                 if (logWarnings)
-                    Debug.LogWarning($"[CustomizeColor] スロット {target.materialSlot} のマテリアルが未設定です。({label})", this);
+                    SamirinRuntimeReport.Warning($"[CustomizeColor] スロット {target.materialSlot} のマテリアルが未設定です。({label})", this);
                 return;
             }
 
@@ -280,7 +283,7 @@ namespace Samirin33.NDMF.Components
             if (string.IsNullOrEmpty(propertyName) || !source.HasColor(propertyName))
             {
                 if (logWarnings)
-                    Debug.LogWarning($"[CustomizeColor] カラープロパティ '{propertyName}' がマテリアル '{source.name}' にありません。({label})", this);
+                    SamirinRuntimeReport.Warning($"[CustomizeColor] カラープロパティ '{propertyName}' がマテリアル '{source.name}' にありません。({label})", this);
                 return;
             }
 
@@ -294,9 +297,9 @@ namespace Samirin33.NDMF.Components
 #if UNITY_EDITOR
             var block = new MaterialPropertyBlock();
             renderer.GetPropertyBlock(block, target.materialSlot);
+            TrackPreviewSlot(renderer, target.materialSlot, propertyName, block);
             block.SetColor(propertyName, color);
             renderer.SetPropertyBlock(block, target.materialSlot);
-            TrackPreviewSlot(renderer, target.materialSlot);
 #endif
         }
 
@@ -323,56 +326,77 @@ namespace Samirin33.NDMF.Components
             return clone;
         }
 
-        void ApplyParticle(ApplyTarget target, Color color, bool logWarnings, string label)
+        void ApplyParticle(ApplyTarget target, Color color, bool preview, bool logWarnings, string label)
         {
             var particle = target.particle;
             if (particle == null)
             {
                 if (logWarnings)
-                    Debug.LogWarning($"[CustomizeColor] ParticleSystem が未設定です。({label})", this);
+                    SamirinRuntimeReport.Warning($"[CustomizeColor] ParticleSystem が未設定です。({label})", this);
                 return;
             }
 
-            switch (target.particleChannel)
+            var current = GetParticleGradient(particle, target.particleChannel);
+            var next = Recolor(current, color, target.preserveAlpha);
+            if (Approximately(current, next))
+                return;
+
+#if UNITY_EDITOR
+            if (preview)
+                TrackParticlePreview(particle, target.particleChannel, current, next);
+#endif
+            SetParticleGradient(particle, target.particleChannel, next);
+        }
+
+        static ParticleSystem.MinMaxGradient GetParticleGradient(ParticleSystem particle, ParticleColorChannel channel)
+        {
+            switch (channel)
             {
-                case ParticleColorChannel.StartColor:
-                {
-                    var main = particle.main;
-                    var next = Recolor(main.startColor, color, target.preserveAlpha);
-                    if (!Approximately(main.startColor, next))
-                        main.startColor = next;
-                    break;
-                }
+                case ParticleColorChannel.ColorOverLifetime:
+                    return particle.colorOverLifetime.color;
+                case ParticleColorChannel.ColorBySpeed:
+                    return particle.colorBySpeed.color;
+                case ParticleColorChannel.TrailColorOverLifetime:
+                    return particle.trails.colorOverLifetime;
+                case ParticleColorChannel.TrailColorOverTrail:
+                    return particle.trails.colorOverTrail;
+                default:
+                    return particle.main.startColor;
+            }
+        }
+
+        static void SetParticleGradient(ParticleSystem particle, ParticleColorChannel channel, ParticleSystem.MinMaxGradient value)
+        {
+            switch (channel)
+            {
                 case ParticleColorChannel.ColorOverLifetime:
                 {
                     var module = particle.colorOverLifetime;
-                    var next = Recolor(module.color, color, target.preserveAlpha);
-                    if (!Approximately(module.color, next))
-                        module.color = next;
+                    module.color = value;
                     break;
                 }
                 case ParticleColorChannel.ColorBySpeed:
                 {
                     var module = particle.colorBySpeed;
-                    var next = Recolor(module.color, color, target.preserveAlpha);
-                    if (!Approximately(module.color, next))
-                        module.color = next;
+                    module.color = value;
                     break;
                 }
                 case ParticleColorChannel.TrailColorOverLifetime:
                 {
                     var module = particle.trails;
-                    var next = Recolor(module.colorOverLifetime, color, target.preserveAlpha);
-                    if (!Approximately(module.colorOverLifetime, next))
-                        module.colorOverLifetime = next;
+                    module.colorOverLifetime = value;
                     break;
                 }
                 case ParticleColorChannel.TrailColorOverTrail:
                 {
                     var module = particle.trails;
-                    var next = Recolor(module.colorOverTrail, color, target.preserveAlpha);
-                    if (!Approximately(module.colorOverTrail, next))
-                        module.colorOverTrail = next;
+                    module.colorOverTrail = value;
+                    break;
+                }
+                default:
+                {
+                    var main = particle.main;
+                    main.startColor = value;
                     break;
                 }
             }
@@ -602,15 +626,37 @@ namespace Samirin33.NDMF.Components
         {
             public Renderer renderer;
             public int materialSlot;
+            public string propertyName;
+            public bool hadColor;
+            public Color originalColor;
+            public bool blockWasEmpty;
+        }
+
+        struct ParticlePreview
+        {
+            public ParticleSystem particle;
+            public ParticleColorChannel channel;
+            public ParticleSystem.MinMaxGradient original;
+            public ParticleSystem.MinMaxGradient written;
         }
 
         [NonSerialized] List<PreviewSlot> _previewSlots;
+        [NonSerialized] List<ParticlePreview> _particlePreviews;
         [NonSerialized] bool _previewQueued;
+        [NonSerialized] bool _previewSuspendedForSave;
 
         void OnEnable()
         {
             Undo.undoRedoPerformed -= OnUndoRedo;
             Undo.undoRedoPerformed += OnUndoRedo;
+            EditorSceneManager.sceneSaving -= OnSceneSaving;
+            EditorSceneManager.sceneSaving += OnSceneSaving;
+            EditorSceneManager.sceneSaved -= OnSceneSaved;
+            EditorSceneManager.sceneSaved += OnSceneSaved;
+            PrefabStage.prefabSaving -= OnPrefabSaving;
+            PrefabStage.prefabSaving += OnPrefabSaving;
+            PrefabStage.prefabSaved -= OnPrefabSaved;
+            PrefabStage.prefabSaved += OnPrefabSaved;
             SchedulePreview();
         }
 
@@ -622,10 +668,60 @@ namespace Samirin33.NDMF.Components
         void OnDisable()
         {
             Undo.undoRedoPerformed -= OnUndoRedo;
+            EditorSceneManager.sceneSaving -= OnSceneSaving;
+            EditorSceneManager.sceneSaved -= OnSceneSaved;
+            PrefabStage.prefabSaving -= OnPrefabSaving;
+            PrefabStage.prefabSaved -= OnPrefabSaved;
             if (Application.isPlaying || EditorApplication.isPlayingOrWillChangePlaymode)
                 return;
 
             ClearMaterialPreview();
+            ClearParticlePreview();
+        }
+
+        // パーティクルのプレビュー色はシーン／プレハブへ保存しない。保存の直前に元へ戻し、直後に掛け直す。
+        void OnSceneSaving(UnityEngine.SceneManagement.Scene scene, string path)
+        {
+            if (this == null || gameObject.scene != scene)
+                return;
+            SuspendPreviewForSave();
+        }
+
+        void OnSceneSaved(UnityEngine.SceneManagement.Scene scene)
+        {
+            if (this == null || gameObject.scene != scene)
+                return;
+            ResumePreviewAfterSave();
+        }
+
+        void OnPrefabSaving(GameObject prefabRoot)
+        {
+            if (this == null || prefabRoot == null || !transform.IsChildOf(prefabRoot.transform))
+                return;
+            SuspendPreviewForSave();
+        }
+
+        void OnPrefabSaved(GameObject prefabRoot)
+        {
+            if (this == null || prefabRoot == null || !transform.IsChildOf(prefabRoot.transform))
+                return;
+            ResumePreviewAfterSave();
+        }
+
+        void SuspendPreviewForSave()
+        {
+            if (_particlePreviews == null || _particlePreviews.Count == 0)
+                return;
+            ClearParticlePreview();
+            _previewSuspendedForSave = true;
+        }
+
+        void ResumePreviewAfterSave()
+        {
+            if (!_previewSuspendedForSave)
+                return;
+            _previewSuspendedForSave = false;
+            SchedulePreview();
         }
 
         void OnUndoRedo()
@@ -658,29 +754,45 @@ namespace Samirin33.NDMF.Components
             ApplyPreview();
         }
 
-        void TrackPreviewSlot(Renderer renderer, int materialSlot)
+        /// <summary>
+        /// プレビューで書き込む前の MaterialPropertyBlock の状態を、スロット・プロパティごとに初回だけ記録する。
+        /// </summary>
+        void TrackPreviewSlot(Renderer renderer, int materialSlot, string propertyName, MaterialPropertyBlock blockBeforeWrite)
         {
             _previewSlots ??= new List<PreviewSlot>();
             for (var i = 0; i < _previewSlots.Count; i++)
             {
                 var existing = _previewSlots[i];
-                if (existing.renderer == renderer && existing.materialSlot == materialSlot)
+                if (existing.renderer == renderer
+                    && existing.materialSlot == materialSlot
+                    && existing.propertyName == propertyName)
                     return;
             }
 
+            var hadColor = blockBeforeWrite.HasColor(propertyName);
             _previewSlots.Add(new PreviewSlot
             {
                 renderer = renderer,
                 materialSlot = materialSlot,
+                propertyName = propertyName,
+                hadColor = hadColor,
+                originalColor = hadColor ? blockBeforeWrite.GetColor(propertyName) : default,
+                blockWasEmpty = blockBeforeWrite.isEmpty,
             });
         }
 
+        /// <summary>
+        /// このコンポーネントが書いたプロパティだけを元に戻す。
+        /// MaterialPropertyBlock は 1 プロパティだけ消す API が無いため、
+        /// 書き込み前にブロックが空だったときだけ Clear し、他ツールの値が既にあったときは
+        /// 元の値（無ければマテリアル自身の値）を書き戻して他の値を残す。
+        /// </summary>
         void ClearMaterialPreview()
         {
             if (_previewSlots == null)
                 return;
 
-            for (var i = 0; i < _previewSlots.Count; i++)
+            for (var i = _previewSlots.Count - 1; i >= 0; i--)
             {
                 var slot = _previewSlots[i];
                 if (slot.renderer == null)
@@ -692,11 +804,75 @@ namespace Samirin33.NDMF.Components
 
                 var block = new MaterialPropertyBlock();
                 slot.renderer.GetPropertyBlock(block, slot.materialSlot);
-                block.Clear();
+                if (slot.hadColor)
+                {
+                    block.SetColor(slot.propertyName, slot.originalColor);
+                }
+                else if (slot.blockWasEmpty)
+                {
+                    block.Clear();
+                }
+                else
+                {
+                    var material = materials[slot.materialSlot];
+                    if (material == null || !material.HasColor(slot.propertyName))
+                        continue;
+                    block.SetColor(slot.propertyName, material.GetColor(slot.propertyName));
+                }
+
                 slot.renderer.SetPropertyBlock(block, slot.materialSlot);
             }
 
             _previewSlots.Clear();
+        }
+
+        void TrackParticlePreview(
+            ParticleSystem particle,
+            ParticleColorChannel channel,
+            ParticleSystem.MinMaxGradient original,
+            ParticleSystem.MinMaxGradient written)
+        {
+            _particlePreviews ??= new List<ParticlePreview>();
+            for (var i = 0; i < _particlePreviews.Count; i++)
+            {
+                var existing = _particlePreviews[i];
+                if (existing.particle != particle || existing.channel != channel)
+                    continue;
+
+                existing.written = written;
+                _particlePreviews[i] = existing;
+                return;
+            }
+
+            _particlePreviews.Add(new ParticlePreview
+            {
+                particle = particle,
+                channel = channel,
+                original = original,
+                written = written,
+            });
+        }
+
+        void ClearParticlePreview()
+        {
+            if (_particlePreviews == null)
+                return;
+
+            for (var i = _particlePreviews.Count - 1; i >= 0; i--)
+            {
+                var preview = _particlePreviews[i];
+                if (preview.particle == null)
+                    continue;
+
+                // プレビュー後にユーザーが手で変えた色は上書きしない。
+                var current = GetParticleGradient(preview.particle, preview.channel);
+                if (!Approximately(current, preview.written))
+                    continue;
+
+                SetParticleGradient(preview.particle, preview.channel, preview.original);
+            }
+
+            _particlePreviews.Clear();
         }
 #endif
     }

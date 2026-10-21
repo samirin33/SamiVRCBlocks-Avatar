@@ -17,3 +17,5 @@
 | 09 | [09-fix-hand-vector.md](features/09-fix-hand-vector.md) | FixHandVector |
 | 10 | [10-tuning-object.md](features/10-tuning-object.md) | TuningObject |
 | 11 | [11-linked-transform.md](features/11-linked-transform.md) | LinkedTransform |
+| 12 | [12-remap-position.md](features/12-remap-position.md) | RemapPosition |
+| 13 | [13-axis-to-parameter.md](features/13-axis-to-parameter.md) | AxisToParameter |

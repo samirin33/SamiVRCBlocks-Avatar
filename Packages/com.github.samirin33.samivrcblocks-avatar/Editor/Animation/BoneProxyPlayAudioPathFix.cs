@@ -3,6 +3,7 @@ using System.Linq;
 using nadena.dev.modular_avatar.core;
 using nadena.dev.ndmf;
 using nadena.dev.ndmf.animator;
+using Samirin33.NDMF.Base;
 using UnityEngine;
 using VRC.SDK3.Avatars.Components;
 using NdmfRuntimeUtil = nadena.dev.ndmf.runtime.RuntimeUtil;
@@ -14,18 +15,36 @@ namespace Samirin33.NDMF.Animation
     /// MA 処理前に Bone Proxy 配下の実在する AudioSource のパスへ置き換える。
     /// 以降の Bone Proxy の移動や Head (1) のような改名は NDMF のパス追跡で反映される。
     /// Behaviour のインスタンスは他プラグインの複製で入れ替わるため、保持しない。
+    /// 書き換え後のパスは解決できるため、MA の FixupAbsolutePlayAudioPass（解決できないパスだけを扱う）とは二重に補正しない。
     /// </summary>
     internal static class BoneProxyPlayAudioPathFix
     {
+        /// <summary>Bone Proxy 配下のオブジェクトと、付け替え後に想定されるアバタールートからのパス。</summary>
+        private readonly struct Candidate
+        {
+            public readonly Transform Transform;
+            public readonly string[] ExpectedSegments;
+
+            /// <summary>末尾から必ず一致させるセグメント数（Bone Proxy 名とその配下の相対パス）。</summary>
+            public readonly int RequiredSegments;
+
+            public Candidate(Transform transform, string[] expectedSegments, int requiredSegments)
+            {
+                Transform = transform;
+                ExpectedSegments = expectedSegments;
+                RequiredSegments = requiredSegments;
+            }
+        }
+
         public static void Execute(BuildContext context)
         {
             var root = context.AvatarRootTransform;
-            if (root.GetComponentInChildren<ModularAvatarBoneProxy>(true) == null)
+            var candidates = CollectCandidates(root);
+            if (candidates.Count == 0)
                 return;
 
             var asc = context.Extension<AnimatorServicesContext>();
             var remapper = asc.ObjectPathRemapper;
-            var indexed = IndexPaths(root);
             var seen = new HashSet<int>();
 
             foreach (var controller in asc.ControllerContext.GetAllControllers())
@@ -49,7 +68,7 @@ namespace Samirin33.NDMF.Animation
                         if (playAudio == null || !seen.Add(playAudio.GetInstanceID()))
                             continue;
 
-                        ResolveSourcePath(remapper, indexed, playAudio);
+                        ResolveSourcePath(remapper, candidates, playAudio);
                     }
                 }
             }
@@ -57,7 +76,7 @@ namespace Samirin33.NDMF.Animation
 
         static void ResolveSourcePath(
             ObjectPathRemapper remapper,
-            List<(string path, Transform transform)> indexed,
+            List<Candidate> candidates,
             VRCAnimatorPlayAudio playAudio)
         {
             var sourcePath = playAudio.SourcePath;
@@ -67,48 +86,57 @@ namespace Samirin33.NDMF.Animation
             if (remapper.GetObjectForPath(sourcePath) != null)
                 return;
 
-            if (!TryFindBoneProxyTarget(indexed, sourcePath, out var target, out var ambiguous))
+            if (!TryFindBoneProxyTarget(candidates, sourcePath, out var target, out var ambiguous))
             {
-                // if (ambiguous)
-                // {
-                //     Debug.LogWarning(
-                //         "[SamiVRCBlocks] VRC Audio Player のパス \"" + sourcePath +
-                //         "\" は解決できず、MA Bone Proxy 配下の候補も一意ではないため書き換えをスキップしました。");
-                // }
+                if (ambiguous)
+                {
+                    SamirinBuildContext.ReportWarning(
+                        "[SamiVRCBlocks] VRC Animator Play Audio のパス \"" + sourcePath +
+                        "\" に当てはまる MA Bone Proxy 配下のオブジェクトが複数あるため、書き換えませんでした。",
+                        playAudio);
+                }
 
                 return;
             }
 
-            var resolvedPath = remapper.GetVirtualPathForObject(target);
-            playAudio.SourcePath = resolvedPath;
-            // Debug.Log(
-            //     "[SamiVRCBlocks] VRC Audio Player のパスを MA Bone Proxy 配下の AudioSource へ合わせました: \"" +
-            //     sourcePath + "\" -> \"" + resolvedPath + "\"");
+            playAudio.SourcePath = remapper.GetVirtualPathForObject(target);
         }
 
         static bool TryFindBoneProxyTarget(
-            List<(string path, Transform transform)> indexed,
+            List<Candidate> candidates,
             string sourcePath,
             out Transform target,
             out bool ambiguous)
         {
             target = null;
             ambiguous = false;
-            var matches = FindSuffixMatches(indexed, sourcePath);
-            var proxied = matches.Where(match => IsUnderBoneProxy(match.transform)).ToList();
-            if (proxied.Count == 0)
+
+            var authored = sourcePath.Split('/');
+            var scored = new List<(Candidate candidate, int score)>();
+            foreach (var candidate in candidates)
+            {
+                var score = CountTrailingMatches(authored, candidate.ExpectedSegments);
+                if (score >= candidate.RequiredSegments)
+                    scored.Add((candidate, score));
+            }
+
+            if (scored.Count == 0)
                 return false;
 
-            var withAudio = proxied.Where(match => match.transform.GetComponent<AudioSource>() != null).ToList();
-            if (withAudio.Count == 1)
+            // 付け替え先（ボーン側）のパスまで多く一致する候補を優先する。
+            var best = scored.Max(entry => entry.score);
+            var matches = scored.Where(entry => entry.score == best).Select(entry => entry.candidate).ToList();
+
+            if (matches.Count == 1)
             {
-                target = withAudio[0].transform;
+                target = matches[0].Transform;
                 return true;
             }
 
-            if (proxied.Count == 1)
+            var withAudio = matches.Where(match => match.Transform.GetComponent<AudioSource>() != null).ToList();
+            if (withAudio.Count == 1)
             {
-                target = proxied[0].transform;
+                target = withAudio[0].Transform;
                 return true;
             }
 
@@ -116,75 +144,103 @@ namespace Samirin33.NDMF.Animation
             return false;
         }
 
-        static List<(string path, Transform transform)> FindSuffixMatches(
-            List<(string path, Transform transform)> indexed,
-            string sourcePath)
+        /// <summary>
+        /// Bone Proxy 配下の各オブジェクトについて「付け替え先のパス / Bone Proxy 名 / Bone Proxy からの相対パス」を作る。
+        /// 少なくとも Bone Proxy 名から下は一致させるため、別の Bone Proxy 配下にある同名オブジェクトだけでは当たらない。
+        /// 付け替え先のパスはアバターごとに階層が違うことがあるため、一致した長さで優先度だけを付ける。
+        /// </summary>
+        static List<Candidate> CollectCandidates(Transform root)
         {
-            var authored = sourcePath.Split('/');
-            for (var start = 0; start < authored.Length; start++)
+            var candidates = new List<Candidate>();
+            foreach (var proxy in root.GetComponentsInChildren<ModularAvatarBoneProxy>(true))
             {
-                var suffixLength = authored.Length - start;
-                var matches = indexed.Where(entry => EndsWithNumberedSegments(entry.path, authored, start, suffixLength)).ToList();
-                if (matches.Count > 0)
-                    return matches;
+                if (proxy == null)
+                    continue;
+
+                var destination = proxy.target;
+                if (destination == null)
+                    continue;
+
+                string destinationPath;
+                if (destination == root)
+                    destinationPath = "";
+                else
+                {
+                    destinationPath = NdmfRuntimeUtil.RelativePath(root, destination);
+                    if (destinationPath == null)
+                        continue;
+                }
+
+                var proxyTransform = proxy.transform;
+                var basePath = string.IsNullOrEmpty(destinationPath)
+                    ? proxyTransform.name
+                    : destinationPath + "/" + proxyTransform.name;
+
+                foreach (var transform in proxyTransform.GetComponentsInChildren<Transform>(true))
+                {
+                    if (NearestBoneProxy(transform) != proxy)
+                        continue;
+
+                    var relative = transform == proxyTransform
+                        ? ""
+                        : NdmfRuntimeUtil.RelativePath(proxyTransform, transform);
+                    if (relative == null)
+                        continue;
+
+                    var expected = string.IsNullOrEmpty(relative) ? basePath : basePath + "/" + relative;
+                    var required = 1 + (string.IsNullOrEmpty(relative) ? 0 : relative.Split('/').Length);
+                    candidates.Add(new Candidate(transform, expected.Split('/'), required));
+                }
             }
 
-            return new List<(string path, Transform transform)>();
+            return candidates;
         }
 
-        static bool EndsWithNumberedSegments(string path, string[] authored, int start, int suffixLength)
+        static ModularAvatarBoneProxy NearestBoneProxy(Transform transform)
         {
-            var actual = path.Split('/');
-            if (actual.Length < suffixLength)
-                return false;
-
-            var offset = actual.Length - suffixLength;
-            for (var i = 0; i < suffixLength; i++)
+            for (var current = transform; current != null; current = current.parent)
             {
-                if (!SegmentMatches(actual[offset + i], authored[start + i]))
-                    return false;
+                if (current.TryGetComponent<ModularAvatarBoneProxy>(out var proxy))
+                    return proxy;
             }
 
-            return true;
+            return null;
+        }
+
+        /// <summary>
+        /// 書かれたパスと想定パスが末尾から何セグメント連続して一致するか。
+        /// 相対 Merge Animator の前置パスなど、先頭側の違いは数えない。
+        /// </summary>
+        static int CountTrailingMatches(string[] authored, string[] expected)
+        {
+            var count = 0;
+            var a = authored.Length - 1;
+            var e = expected.Length - 1;
+            while (a >= 0 && e >= 0 && SegmentMatches(authored[a], expected[e]))
+            {
+                count++;
+                a--;
+                e--;
+            }
+
+            return count;
         }
 
         /// <summary>
         /// Bone Proxy の名前衝突で付く "Head (1)" を、元の "Head" と同じセグメントとして扱う。
         /// </summary>
-        static bool SegmentMatches(string actual, string authored)
+        static bool SegmentMatches(string a, string b)
         {
-            if (actual == authored)
-                return true;
+            return a == b || IsNumberedVariant(a, b) || IsNumberedVariant(b, a);
+        }
+
+        static bool IsNumberedVariant(string actual, string authored)
+        {
             if (!actual.StartsWith(authored + " (", System.StringComparison.Ordinal) || !actual.EndsWith(")"))
                 return false;
 
             var number = actual.Substring(authored.Length + 2, actual.Length - authored.Length - 3);
             return int.TryParse(number, out _);
-        }
-
-        static List<(string path, Transform transform)> IndexPaths(Transform root)
-        {
-            var indexed = new List<(string path, Transform transform)>();
-            foreach (var transform in root.GetComponentsInChildren<Transform>(true))
-            {
-                var path = NdmfRuntimeUtil.RelativePath(root, transform);
-                if (string.IsNullOrEmpty(path))
-                    continue;
-                indexed.Add((path, transform));
-            }
-
-            return indexed;
-        }
-
-        static bool IsUnderBoneProxy(Transform transform)
-        {
-            for (var current = transform; current != null; current = current.parent)
-            {
-                if (current.GetComponent<ModularAvatarBoneProxy>() != null)
-                    return true;
-            }
-
-            return false;
         }
     }
 }

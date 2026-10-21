@@ -216,7 +216,7 @@ namespace Samirin33.NDMF.Components
             var proxy = entry.boneProxy;
             if (proxy == null)
             {
-                Debug.LogWarning(
+                SamirinRuntimeReport.Warning(
                     $"[DominantHandOption] Bone Proxy が未設定です。(#{index + 1})",
                     this);
                 return;
@@ -231,7 +231,7 @@ namespace Samirin33.NDMF.Components
             var fix = entry.fixHandVector;
             if (fix == null)
             {
-                Debug.LogWarning(
+                SamirinRuntimeReport.Warning(
                     $"[DominantHandOption] FixHandVector が未設定です。(#{index + 1})",
                     this);
                 return;
@@ -249,7 +249,7 @@ namespace Samirin33.NDMF.Components
             {
                 if (entry.setPosition || entry.setRotation)
                 {
-                    Debug.LogWarning(
+                    SamirinRuntimeReport.Warning(
                         $"[DominantHandOption] Transform が未設定です。(#{index + 1})",
                         this);
                 }
@@ -382,13 +382,34 @@ namespace Samirin33.NDMF.Components
             return (before.lossyScale - after.lossyScale).sqrMagnitude > 1e-10f;
         }
 
+        static bool _warnedMissingBoneProxyApi;
+
+        /// <summary>
+        /// boneReference をスクリプトから変えた直後に、Bone Proxy の参照先と位置を更新する。
+        /// MA は公開の再計算 API を持たないため internal メソッドを反射で呼び、
+        /// 見つからない（MA の更新で変わった）場合は公開の ResolveReferences で参照先だけ更新して一度警告する。
+        /// </summary>
         static void RefreshBoneProxy(ModularAvatarBoneProxy proxy)
         {
             if (proxy == null)
                 return;
 
-            BoneProxyClearCacheMethod?.Invoke(proxy, new object[] { true });
-            BoneProxyUpdateMethod?.Invoke(proxy, null);
+            if (BoneProxyClearCacheMethod != null)
+                BoneProxyClearCacheMethod.Invoke(proxy, new object[] { true });
+            else
+                proxy.ResolveReferences();
+
+            if (BoneProxyUpdateMethod != null)
+                BoneProxyUpdateMethod.Invoke(proxy, null);
+
+            if ((BoneProxyClearCacheMethod == null || BoneProxyUpdateMethod == null) && !_warnedMissingBoneProxyApi)
+            {
+                _warnedMissingBoneProxyApi = true;
+                Debug.LogWarning(
+                    "[DominantHandOption] Modular Avatar の Bone Proxy 内部 API（ClearCache(bool) / Update）が見つかりません。" +
+                    "利き手切り替え直後の位置がエディタ上で 1 フレーム遅れて反映される可能性があります（ビルド結果には影響しません）。",
+                    proxy);
+            }
         }
 
     }

@@ -7,9 +7,14 @@ namespace Samirin33.NDMF.Components
     [AddComponentMenu("SamiVRCBlocks-Avatar/SB ResizableSyncParameters")]
     public class ResizableSyncParameters : SamirinMABaseSingle
     {
+        public ResizableSyncParameters()
+        {
+            // priority は NonSerialized のため Reset ではビルド時に残らない。
+            priority = 50;
+        }
+
         private void Reset()
         {
-            priority = 50;
             matchAvatarWriteDefaults = true;
         }
 

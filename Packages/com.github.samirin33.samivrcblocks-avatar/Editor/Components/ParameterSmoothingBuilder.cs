@@ -1,11 +1,11 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using UnityEditor;
 using UnityEditor.Animations;
 using UnityEngine;
 using nadena.dev.modular_avatar.core;
+using Samirin33.NDMF.Base;
 using Samirin33.NDMF.Base.Plugin;
 using Samirin33.NDMF.Components;
 using Samirin33.NDMF.Module;
@@ -86,7 +86,9 @@ namespace Samirin33.NDMF.Components.Editor
                 : null;
             if (fpsCounter == null)
             {
-                Debug.LogError($"[ParameterSmoothing] FPSCounter not found (GUID: {FPSCounterGUID}, path: {fpsCounterPath})");
+                SamirinBuildContext.ReportError(
+                    $"[ParameterSmoothing] FPSCounter プレファブが見つかりません（GUID: {FPSCounterGUID}, path: {fpsCounterPath}）。スムージングの重みが FPS で補正されません。",
+                    targetObject);
                 return;
             }
 
@@ -129,7 +131,9 @@ namespace Samirin33.NDMF.Components.Editor
             var controller = CreateControllerFromParameterSmoothingData(infos, out var paramNamesToRegister, fromResizableSyncParameters);
             if (controller == null)
             {
-                Debug.LogError("[ParameterSmoothing] Animator Controller の生成に失敗しました。MA Merge Animator は登録されません。");
+                SamirinBuildContext.ReportError(
+                    "[ParameterSmoothing] Animator Controller の生成に失敗しました。MA Merge Animator は登録されません。",
+                    moduleParent);
                 return null;
             }
 
@@ -165,7 +169,7 @@ namespace Samirin33.NDMF.Components.Editor
 
             if (Mathf.Approximately(min, max))
             {
-                Debug.LogWarning($"[ParameterSmoothing] {info.parameterName} のクランプ範囲が無効なため、最大値を広げて生成します。");
+                SamirinBuildContext.ReportWarning($"[ParameterSmoothing] {info.parameterName} のクランプ範囲が無効なため、最大値を広げて生成します。");
                 max = min + 0.0001f;
             }
         }
@@ -218,16 +222,12 @@ namespace Samirin33.NDMF.Components.Editor
         {
             paramNamesToRegister = new List<(string, ParameterSyncType)>();
 
-            if (!Directory.Exists(GeneratedFolder))
-                Directory.CreateDirectory(GeneratedFolder);
-
-            var controllerPath = fromResizableSyncParameters
-                ? $"{GeneratedFolder}/ResizableSyncParameters_Smoothing_Generated.controller"
-                : $"{GeneratedFolder}/ParameterSmoothing_Generated.controller";
-            if (AssetDatabase.LoadAssetAtPath<AnimatorController>(controllerPath) != null)
-                AssetDatabase.DeleteAsset(controllerPath);
-
-            var controller = AnimatorController.CreateAnimatorControllerAtPath(controllerPath);
+            var controllerName = fromResizableSyncParameters
+                ? "ResizableSyncParameters_Smoothing_Generated"
+                : "ParameterSmoothing_Generated";
+            var controller = ModularAvatarMergeAnimatorUtility.CreateGeneratedController(
+                controllerName,
+                $"{GeneratedFolder}/{controllerName}.controller");
             if (controller == null)
                 return null;
 
@@ -254,11 +254,10 @@ namespace Samirin33.NDMF.Components.Editor
                 if (addedFixedWeightParams.Add(fixedWeightParamName))
                     controller.AddParameter(fixedWeightParamName, AnimatorControllerParameterType.Float);
 
+                // 元パラメーターはユーザー側の定義（同期 Int/Bool や初期値）に任せる。
+                // ここで Float・初期値 0 として登録すると MA の型衝突エラーや初期値の上書きになる。
                 if (!fromResizableSyncParameters)
-                {
-                    paramNamesToRegister.Add((paramName, ParameterSyncType.Float));
                     paramNamesToRegister.Add((smoothedParamName, ParameterSyncType.Float));
-                }
             }
 
             if (!fromResizableSyncParameters)
@@ -274,10 +273,7 @@ namespace Samirin33.NDMF.Components.Editor
 
             AnimatorControllerAssetUtility.RegisterControllerHierarchy(controller);
 
-            EditorUtility.SetDirty(controller);
-            UnityEditorInternal.InternalEditorUtility.RepaintAllViews();
-
-            return ModularAvatarMergeAnimatorUtility.ReloadControllerAtPath(controllerPath);
+            return ModularAvatarMergeAnimatorUtility.FinalizeGeneratedController(controller);
         }
 
         private static AnimatorControllerLayer CreateParameterSmoothingLayer(
@@ -328,7 +324,7 @@ namespace Samirin33.NDMF.Components.Editor
                 minThreshold = 0f,
                 maxThreshold = 1f
             };
-            AssetDatabase.AddObjectToAsset(directTree, controller);
+            AnimatorControllerAssetUtility.EnsureSubAsset(directTree, controller);
 
             // WeightFix: 数式に従ってキーフレームを生成した Clip を配置（SampleRate 255, フレーム 1~255、全パラメータ分のカーブ）
             var weightFixClip = CreateWeightFixClip(infos, controller);
@@ -401,7 +397,7 @@ namespace Samirin33.NDMF.Components.Editor
             }
 
             clip.name = "WeightFix";
-            AssetDatabase.AddObjectToAsset(clip, controller);
+            AnimatorControllerAssetUtility.EnsureSubAsset(clip, controller);
             return clip;
         }
 
@@ -432,7 +428,7 @@ namespace Samirin33.NDMF.Components.Editor
                 minThreshold = 0f,
                 maxThreshold = 1f
             };
-            AssetDatabase.AddObjectToAsset(tree, controller);
+            AnimatorControllerAssetUtility.EnsureSubAsset(tree, controller);
             tree.AddChild(rawTree, 0f);
             tree.AddChild(smoothedTree, 1f);
             return tree;
@@ -450,7 +446,7 @@ namespace Samirin33.NDMF.Components.Editor
                 minThreshold = clampMin,
                 maxThreshold = clampMax
             };
-            AssetDatabase.AddObjectToAsset(tree, controller);
+            AnimatorControllerAssetUtility.EnsureSubAsset(tree, controller);
             tree.AddChild(clipMin, clampMin);
             tree.AddChild(clipMax, clampMax);
             SetSimple1DThresholds(tree, clampMin, clampMax);
@@ -469,7 +465,7 @@ namespace Samirin33.NDMF.Components.Editor
                 minThreshold = clampMin,
                 maxThreshold = clampMax
             };
-            AssetDatabase.AddObjectToAsset(tree, controller);
+            AnimatorControllerAssetUtility.EnsureSubAsset(tree, controller);
             tree.AddChild(clipMin, clampMin);
             tree.AddChild(clipMax, clampMax);
             SetSimple1DThresholds(tree, clampMin, clampMax);
@@ -523,7 +519,7 @@ namespace Samirin33.NDMF.Components.Editor
         {
             var clip = CreateAnimatorParamClip(paramName, value);
             clip.name = $"{paramName} {value}";
-            AssetDatabase.AddObjectToAsset(clip, controller);
+            AnimatorControllerAssetUtility.EnsureSubAsset(clip, controller);
             return clip;
         }
 
@@ -553,7 +549,9 @@ namespace Samirin33.NDMF.Components.Editor
                 matchAvatarWriteDefaults: matchAvatarWriteDefaults);
             if (moduleRoot == null)
             {
-                Debug.LogError("[ParameterSmoothing] MA Merge Animator の登録に失敗しました。Animator Controller の参照を確認してください。");
+                SamirinBuildContext.ReportError(
+                    "[ParameterSmoothing] MA Merge Animator の登録に失敗しました。Animator Controller の参照を確認してください。",
+                    parentObject);
                 return;
             }
 

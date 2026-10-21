@@ -27,7 +27,7 @@ namespace Samirin33.NDMF.Components
         {
             if (buildPhase != SamirinBuildPhase.Resolving || !beforeModularAvatar) return;
 #if UNITY_EDITOR
-            var sourceTransform = GetWorldPrefabTransform();
+            var sourceTransform = GetWorldPrefabTransform(force: true);
             if (sourceTransform == null)
             {
                 DestroyImmediate(this);
@@ -134,13 +134,35 @@ namespace Samirin33.NDMF.Components
             }
         }
 
-        private static Transform GetWorldPrefabTransform()
+        // LateUpdate から毎フレーム呼ばれるため、見つかった Transform を使い回す。
+        // 見つからないときの再検索は一定間隔に抑える（ビルド時は常に検索する）。
+        private const double WorldPrefabRetrySeconds = 2.0;
+        private static Transform _worldPrefabTransform;
+        private static double _nextWorldPrefabLookupTime;
+
+        /// <summary>
+        /// シーンに置かない World プレハブ（アセット）の Transform。VRC Constraint のソースにするとワールド原点を指す。
+        /// 見つからないときは null。
+        /// </summary>
+        public static Transform GetWorldOriginTransform()
         {
+            return GetWorldPrefabTransform(force: true);
+        }
+
+        private static Transform GetWorldPrefabTransform(bool force = false)
+        {
+            if (_worldPrefabTransform != null) return _worldPrefabTransform;
+
+            var now = EditorApplication.timeSinceStartup;
+            if (!force && now < _nextWorldPrefabLookupTime) return null;
+            _nextWorldPrefabLookupTime = now + WorldPrefabRetrySeconds;
+
             var path = AssetDatabase.GUIDToAssetPath(WorldPrefabGUID);
             if (string.IsNullOrEmpty(path)) return null;
 
             var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
-            return prefab != null ? prefab.transform : null;
+            _worldPrefabTransform = prefab != null ? prefab.transform : null;
+            return _worldPrefabTransform;
         }
 
         private static void FinishConstraint(VRCConstraintBase constraint, Transform sourceTransform)

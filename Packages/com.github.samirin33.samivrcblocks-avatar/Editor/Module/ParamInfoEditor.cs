@@ -1,6 +1,7 @@
+using System;
 using UnityEngine;
 using UnityEditor;
-using Samirin33.Editor;
+using UnityEditor.Animations;
 using Samirin33.NDMF.Module;
 
 namespace Samirin33.NDMF.Module.Editor
@@ -8,21 +9,30 @@ namespace Samirin33.NDMF.Module.Editor
     [CustomPropertyDrawer(typeof(ExtendedParamInfo.ParamInfo))]
     public class ParamInfoEditor : PropertyDrawer
     {
-        public override bool CanCacheInspectorGUI(SerializedProperty property)
-        {
-            return false;
-        }
+        private const float RowSpacing = 2f;
+        private const int ExplanationLines = 2;
+        private const float SyncButtonWidth = 48f;
+
+        private static readonly GUIContent ParamNameContent = new GUIContent("パラメーター名", "Animator のパラメーターから選ぶか、名前を直接入力します。");
+        private static readonly GUIContent ParamTypeContent = new GUIContent("型", "Animator に同名のパラメーターがあるときは自動で設定されます。");
+        private static readonly GUIContent ParamTypeMismatchContent = new GUIContent("型（Animator と未同期）", "Animator 側の型または初期値と異なります。「同期」で Animator の型と初期値を取り込みます。");
+        private static readonly GUIContent ParamExplanationContent = new GUIContent("説明", "ExtendedParameters のインスペクターに表示される説明文です。");
+        private static readonly GUIContent SyncContent = new GUIContent("同期", "Animator の型と初期値を取り込みます。");
+        private const string UnselectedOption = "(未選択)";
+
+        private static readonly AnimatorControllerParameterType[] ParameterTypes =
+            (AnimatorControllerParameterType[])Enum.GetValues(typeof(AnimatorControllerParameterType));
 
         public override void OnGUI(Rect position, SerializedProperty property, GUIContent label)
         {
             EditorGUI.BeginProperty(position, label, property);
 
-            var paramNameProp = property.FindPropertyRelative("paramName");
-            var paramTypeProp = property.FindPropertyRelative("paramType");
-            var paramExplanationProp = property.FindPropertyRelative("paramExplanation");
-            var defaultFloatProp = property.FindPropertyRelative("defaultFloat");
-            var defaultIntProp = property.FindPropertyRelative("defaultInt");
-            var defaultBoolProp = property.FindPropertyRelative("defaultBool");
+            var paramNameProp = property.FindPropertyRelative(nameof(ExtendedParamInfo.ParamInfo.paramName));
+            var paramTypeProp = property.FindPropertyRelative(nameof(ExtendedParamInfo.ParamInfo.paramType));
+            var paramExplanationProp = property.FindPropertyRelative(nameof(ExtendedParamInfo.ParamInfo.paramExplanation));
+            var defaultFloatProp = property.FindPropertyRelative(nameof(ExtendedParamInfo.ParamInfo.defaultFloat));
+            var defaultIntProp = property.FindPropertyRelative(nameof(ExtendedParamInfo.ParamInfo.defaultInt));
+            var defaultBoolProp = property.FindPropertyRelative(nameof(ExtendedParamInfo.ParamInfo.defaultBool));
 
             if (paramNameProp == null || paramTypeProp == null || paramExplanationProp == null)
             {
@@ -31,158 +41,179 @@ namespace Samirin33.NDMF.Module.Editor
                 return;
             }
 
-            // ExtendedParamInfoからAnimatorを取得
-            Animator animator = null;
-            if (property.serializedObject.targetObject is ExtendedParamInfo extendedParamInfo)
-            {
-                animator = extendedParamInfo.animator;
-                if (animator == null)
-                {
-                    animator = extendedParamInfo.GetComponent<Animator>();
-                }
-            }
+            var parameters = GetControllerParameters(property);
+            var lineHeight = EditorGUIUtility.singleLineHeight;
+            var rect = new Rect(position.x, position.y, position.width, lineHeight);
 
-            float lineHeight = EditorGUIUtility.singleLineHeight + 2f;
-            float y = position.y;
+            DrawParamName(rect, parameters, paramNameProp, paramTypeProp, defaultFloatProp, defaultIntProp, defaultBoolProp);
+            rect.y += lineHeight + RowSpacing;
 
-            // paramName（プルダウンまたはテキストフィールド）
-            Rect paramNameRect = new Rect(position.x, y, position.width, EditorGUIUtility.singleLineHeight);
-            string[] paramNames = null;
-            int selectedIndex = -1;
-            bool paramExistsInAnimator = false;
+            var matched = paramNameProp.hasMultipleDifferentValues ? null : FindParameter(parameters, paramNameProp.stringValue);
+            DrawParamType(rect, matched, paramTypeProp, defaultFloatProp, defaultIntProp, defaultBoolProp);
+            rect.y += lineHeight + RowSpacing;
 
-            if (animator != null && animator.runtimeAnimatorController != null)
-            {
-                var parameters = animator.parameters;
-                if (parameters.Length > 0)
-                {
-                    var namesList = new System.Collections.Generic.List<string> { "(未選択)" };
-                    foreach (var param in parameters)
-                    {
-                        namesList.Add(param.name);
-                        if (param.name == paramNameProp.stringValue)
-                        {
-                            selectedIndex = namesList.Count - 1;
-                            paramExistsInAnimator = true;
-                        }
-                    }
-                    paramNames = namesList.ToArray();
-                }
-            }
+            EditorGUI.LabelField(rect, ParamExplanationContent);
+            rect.y += lineHeight + RowSpacing;
 
-            if (paramNames != null && paramNames.Length > 1)
-            {
-                bool showDropdown = string.IsNullOrEmpty(paramNameProp.stringValue) || paramExistsInAnimator;
-
-                if (showDropdown)
-                {
-                    EditorGUI.BeginChangeCheck();
-                    int newIndex = EditorGUI.Popup(paramNameRect, "Param Name", selectedIndex < 0 ? 0 : selectedIndex, paramNames);
-                    if (EditorGUI.EndChangeCheck())
-                    {
-                        string newValue = newIndex > 0 ? paramNames[newIndex] : "";
-                        paramNameProp.stringValue = newValue;
-                        if (newIndex > 0 && animator != null)
-                        {
-                            var enumValues = (AnimatorControllerParameterType[])System.Enum.GetValues(typeof(AnimatorControllerParameterType));
-                            foreach (var param in animator.parameters)
-                            {
-                                if (param.name == newValue)
-                                {
-                                    paramTypeProp.enumValueIndex = System.Array.IndexOf(enumValues, param.type);
-                                    SyncDefaultFromAnimatorParam(param, defaultFloatProp, defaultIntProp, defaultBoolProp);
-                                    break;
-                                }
-                            }
-                        }
-                        property.serializedObject.ApplyModifiedProperties();
-                    }
-                }
-                else
-                {
-                    EditorGUI.BeginChangeCheck();
-                    string newValue = EditorGUI.TextField(paramNameRect, "Param Name", paramNameProp.stringValue);
-                    if (EditorGUI.EndChangeCheck())
-                    {
-                        paramNameProp.stringValue = newValue;
-                        if (!string.IsNullOrEmpty(newValue) && animator != null && animator.runtimeAnimatorController != null)
-                        {
-                            foreach (var param in animator.parameters)
-                            {
-                                if (param.name == newValue)
-                                {
-                                    var enumValues = (AnimatorControllerParameterType[])System.Enum.GetValues(typeof(AnimatorControllerParameterType));
-                                    paramTypeProp.enumValueIndex = System.Array.IndexOf(enumValues, param.type);
-                                    SyncDefaultFromAnimatorParam(param, defaultFloatProp, defaultIntProp, defaultBoolProp);
-                                    break;
-                                }
-                            }
-                        }
-                        property.serializedObject.ApplyModifiedProperties();
-                    }
-                }
-            }
-            else
-            {
-                EditorGUI.PropertyField(paramNameRect, paramNameProp, new GUIContent("Param Name"));
-            }
-
-            y += lineHeight;
-
-            // paramType（Animatorに存在する場合は自動認識してロック、未設定時は手動編集可）
-            Rect paramTypeRect = new Rect(position.x, y, position.width, EditorGUIUtility.singleLineHeight);
-            bool typeLockedFromAnimator = false;
-            if (!string.IsNullOrEmpty(paramNameProp.stringValue) && animator != null && animator.runtimeAnimatorController != null)
-            {
-                var enumValues = (AnimatorControllerParameterType[])System.Enum.GetValues(typeof(AnimatorControllerParameterType));
-                foreach (var param in animator.parameters)
-                {
-                    if (param.name == paramNameProp.stringValue)
-                    {
-                        int newTypeIndex = System.Array.IndexOf(enumValues, param.type);
-                        if (paramTypeProp.enumValueIndex != newTypeIndex)
-                        {
-                            paramTypeProp.enumValueIndex = newTypeIndex;
-                            property.serializedObject.ApplyModifiedProperties();
-                        }
-                        SyncDefaultFromAnimatorParam(param, defaultFloatProp, defaultIntProp, defaultBoolProp);
-                        property.serializedObject.ApplyModifiedProperties();
-                        typeLockedFromAnimator = true;
-                        break;
-                    }
-                }
-            }
-            EditorGUI.BeginDisabledGroup(typeLockedFromAnimator);
+            var explanationRect = new Rect(position.x, rect.y, position.width, lineHeight * ExplanationLines);
             EditorGUI.BeginChangeCheck();
-            EditorGUI.PropertyField(paramTypeRect, paramTypeProp, new GUIContent("Param Type"));
+            EditorGUI.showMixedValue = paramExplanationProp.hasMultipleDifferentValues;
+            var newExplanation = EditorGUI.TextArea(explanationRect, paramExplanationProp.stringValue);
+            EditorGUI.showMixedValue = false;
             if (EditorGUI.EndChangeCheck())
-            {
-                property.serializedObject.ApplyModifiedProperties();
-            }
-            EditorGUI.EndDisabledGroup();
-            y += lineHeight;
-
-            // paramExplanation（テキストエリアで改行対応）
-            Rect paramExplanationLabelRect = new Rect(position.x, y, position.width, EditorGUIUtility.singleLineHeight);
-            float textAreaHeight = EditorGUIUtility.singleLineHeight * 2f;
-            Rect paramExplanationRect = new Rect(position.x, y + EditorGUIUtility.singleLineHeight + 2f, position.width, textAreaHeight);
-            EditorGUI.PrefixLabel(paramExplanationLabelRect, new GUIContent("Param Explanation"));
-            string newExplanation = EditorGUI.TextArea(paramExplanationRect, paramExplanationProp.stringValue);
-            if (paramExplanationProp.stringValue != newExplanation)
-            {
                 paramExplanationProp.stringValue = newExplanation;
-                property.serializedObject.ApplyModifiedProperties();
-            }
 
             EditorGUI.EndProperty();
         }
 
-        private static void SyncDefaultFromAnimatorParam(
+        public override float GetPropertyHeight(SerializedProperty property, GUIContent label)
+        {
+            var lineHeight = EditorGUIUtility.singleLineHeight;
+            return (lineHeight + RowSpacing) * 3f + lineHeight * ExplanationLines + RowSpacing;
+        }
+
+        private static void DrawParamName(
+            Rect rect,
+            AnimatorControllerParameter[] parameters,
+            SerializedProperty paramNameProp,
+            SerializedProperty paramTypeProp,
+            SerializedProperty defaultFloatProp,
+            SerializedProperty defaultIntProp,
+            SerializedProperty defaultBoolProp)
+        {
+            var current = paramNameProp.stringValue ?? string.Empty;
+            var existsInAnimator = FindParameter(parameters, current) != null;
+            var useDropdown = parameters != null && parameters.Length > 0
+                && !paramNameProp.hasMultipleDifferentValues
+                && (string.IsNullOrEmpty(current) || existsInAnimator);
+
+            string newValue;
+            EditorGUI.BeginChangeCheck();
+            if (useDropdown)
+            {
+                var options = new string[parameters.Length + 1];
+                options[0] = UnselectedOption;
+                var selected = 0;
+                for (var i = 0; i < parameters.Length; i++)
+                {
+                    options[i + 1] = parameters[i].name;
+                    if (parameters[i].name == current)
+                        selected = i + 1;
+                }
+
+                var index = EditorGUI.Popup(rect, ParamNameContent.text, selected, options);
+                newValue = index > 0 ? options[index] : string.Empty;
+            }
+            else
+            {
+                EditorGUI.showMixedValue = paramNameProp.hasMultipleDifferentValues;
+                newValue = EditorGUI.DelayedTextField(rect, ParamNameContent, current);
+                EditorGUI.showMixedValue = false;
+            }
+
+            if (!EditorGUI.EndChangeCheck())
+                return;
+
+            paramNameProp.stringValue = newValue;
+            var matched = FindParameter(parameters, newValue);
+            if (matched != null)
+                SyncFromAnimatorParam(matched, paramTypeProp, defaultFloatProp, defaultIntProp, defaultBoolProp);
+        }
+
+        private static void DrawParamType(
+            Rect rect,
+            AnimatorControllerParameter matched,
+            SerializedProperty paramTypeProp,
+            SerializedProperty defaultFloatProp,
+            SerializedProperty defaultIntProp,
+            SerializedProperty defaultBoolProp)
+        {
+            if (matched == null)
+            {
+                EditorGUI.PropertyField(rect, paramTypeProp, ParamTypeContent);
+                return;
+            }
+
+            var mismatch = paramTypeProp.hasMultipleDifferentValues
+                || paramTypeProp.enumValueIndex != Array.IndexOf(ParameterTypes, matched.type)
+                || !DefaultMatches(matched, defaultFloatProp, defaultIntProp, defaultBoolProp);
+            var fieldRect = rect;
+            if (mismatch)
+            {
+                fieldRect.width -= SyncButtonWidth + 4f;
+                var buttonRect = new Rect(fieldRect.xMax + 4f, rect.y, SyncButtonWidth, rect.height);
+                if (GUI.Button(buttonRect, SyncContent, EditorStyles.miniButton))
+                    SyncFromAnimatorParam(matched, paramTypeProp, defaultFloatProp, defaultIntProp, defaultBoolProp);
+            }
+
+            using (new EditorGUI.DisabledScope(true))
+                EditorGUI.PropertyField(fieldRect, paramTypeProp, mismatch ? ParamTypeMismatchContent : ParamTypeContent);
+        }
+
+        private static AnimatorControllerParameter[] GetControllerParameters(SerializedProperty property)
+        {
+            if (!(property.serializedObject.targetObject is ExtendedParamInfo info))
+                return null;
+
+            var animator = info.animator != null ? info.animator : info.GetComponent<Animator>();
+            if (animator == null)
+                return null;
+
+            // Animator.parameters はエディットモードでは空になることがあるため、Controller から直接読む
+            var runtimeController = animator.runtimeAnimatorController;
+            if (runtimeController is AnimatorOverrideController overrideController)
+                runtimeController = overrideController.runtimeAnimatorController;
+
+            return runtimeController is AnimatorController controller ? controller.parameters : null;
+        }
+
+        private static AnimatorControllerParameter FindParameter(AnimatorControllerParameter[] parameters, string name)
+        {
+            if (parameters == null || string.IsNullOrEmpty(name))
+                return null;
+
+            foreach (var parameter in parameters)
+            {
+                if (parameter.name == name)
+                    return parameter;
+            }
+
+            return null;
+        }
+
+        private static bool DefaultMatches(
             AnimatorControllerParameter param,
             SerializedProperty defaultFloatProp,
             SerializedProperty defaultIntProp,
             SerializedProperty defaultBoolProp)
         {
+            if (defaultFloatProp == null || defaultIntProp == null || defaultBoolProp == null) return true;
+
+            switch (param.type)
+            {
+                case AnimatorControllerParameterType.Float:
+                    return !defaultFloatProp.hasMultipleDifferentValues
+                        && Mathf.Approximately(defaultFloatProp.floatValue, param.defaultFloat);
+                case AnimatorControllerParameterType.Int:
+                    return !defaultIntProp.hasMultipleDifferentValues && defaultIntProp.intValue == param.defaultInt;
+                case AnimatorControllerParameterType.Bool:
+                    return !defaultBoolProp.hasMultipleDifferentValues && defaultBoolProp.boolValue == param.defaultBool;
+                default:
+                    return true;
+            }
+        }
+
+        private static void SyncFromAnimatorParam(
+            AnimatorControllerParameter param,
+            SerializedProperty paramTypeProp,
+            SerializedProperty defaultFloatProp,
+            SerializedProperty defaultIntProp,
+            SerializedProperty defaultBoolProp)
+        {
+            var typeIndex = Array.IndexOf(ParameterTypes, param.type);
+            if (typeIndex >= 0)
+                paramTypeProp.enumValueIndex = typeIndex;
+
             if (defaultFloatProp == null || defaultIntProp == null || defaultBoolProp == null) return;
 
             switch (param.type)
@@ -197,13 +228,6 @@ namespace Samirin33.NDMF.Module.Editor
                     defaultBoolProp.boolValue = param.defaultBool;
                     break;
             }
-        }
-
-        public override float GetPropertyHeight(SerializedProperty property, GUIContent label)
-        {
-            float lineHeight = EditorGUIUtility.singleLineHeight + 2f;
-            float textAreaHeight = EditorGUIUtility.singleLineHeight * 3f;
-            return lineHeight * 3f + textAreaHeight + 2f;
         }
     }
 }

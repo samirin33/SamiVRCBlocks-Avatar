@@ -176,6 +176,19 @@ namespace Samirin33.NDMF.Components
         [SerializeField, HideInInspector]
         private int _targetApplyOffsetHash;
 
+        /// <summary>
+        /// 直前に適用した Target の参照（index 対応）。InstanceID はセッションごとに変わるため、
+        /// ハッシュには含めず参照そのものを保存して比較する。
+        /// </summary>
+        [SerializeField, HideInInspector]
+        private Transform[] _targetApplyTransforms;
+
+        // 0: 旧形式（ハッシュに InstanceID を含む）, 2: 参照を別フィールドで比較する形式
+        private const int CurrentTargetApplyStampVersion = 2;
+
+        [SerializeField, HideInInspector]
+        private int _targetApplyStampVersion;
+
         private void Update()
         {
 #if UNITY_EDITOR
@@ -215,7 +228,35 @@ namespace Samirin33.NDMF.Components
                 return true;
             if ((transform.localScale - _targetApplyLocalScale).sqrMagnitude > 1e-12f)
                 return true;
-            return ComputeOffsetHash() != _targetApplyOffsetHash;
+
+            if (_targetApplyStampVersion < CurrentTargetApplyStampVersion)
+            {
+                // 旧形式のハッシュは InstanceID 入りで比較できない。姿勢が同じなら再適用せず新形式へ移行する
+                // （ここで再適用すると、利き手切り替えで調整済みの Target が上書きされる）。
+                CaptureDrivingPose();
+                return false;
+            }
+
+            if (ComputeOffsetHash() != _targetApplyOffsetHash)
+                return true;
+            return !TargetReferencesMatchStamp();
+        }
+
+        private bool TargetReferencesMatchStamp()
+        {
+            var count = targetTransforms != null ? targetTransforms.Length : 0;
+            var stampCount = _targetApplyTransforms != null ? _targetApplyTransforms.Length : 0;
+            if (count != stampCount)
+                return false;
+
+            for (int i = 0; i < count; i++)
+            {
+                var current = targetTransforms[i]?.transform;
+                if (current != _targetApplyTransforms[i])
+                    return false;
+            }
+
+            return true;
         }
 
         private void CaptureDrivingPose()
@@ -225,6 +266,13 @@ namespace Samirin33.NDMF.Components
             _targetApplyLocalRotation = transform.localRotation;
             _targetApplyLocalScale = transform.localScale;
             _targetApplyOffsetHash = ComputeOffsetHash();
+
+            var count = targetTransforms != null ? targetTransforms.Length : 0;
+            if (_targetApplyTransforms == null || _targetApplyTransforms.Length != count)
+                _targetApplyTransforms = new Transform[count];
+            for (int i = 0; i < count; i++)
+                _targetApplyTransforms[i] = targetTransforms[i]?.transform;
+            _targetApplyStampVersion = CurrentTargetApplyStampVersion;
         }
 
         private int ComputeOffsetHash()
@@ -245,7 +293,6 @@ namespace Samirin33.NDMF.Components
                         continue;
                     }
 
-                    hash = hash * 31 + (entry.transform != null ? entry.transform.GetInstanceID() : 0);
                     hash = HashVector(hash, entry.offsetPosition);
                     hash = HashVector(hash, entry.offsetRotation);
                     hash = HashVector(hash, entry.offsetScale);
@@ -272,10 +319,25 @@ namespace Samirin33.NDMF.Components
             if (buildPhase != SamirinBuildPhase.Transforming || beforeModularAvatar)
                 return;
 
-            if (transform.childCount == 0)
+            if (transform.childCount == 0 && HasOnlyTransformAndSelf())
                 DestroyImmediate(gameObject);
             else
                 DestroyImmediate(this);
+        }
+
+        private bool HasOnlyTransformAndSelf()
+        {
+            foreach (var component in GetComponents<Component>())
+            {
+                // Missing Script は null で返るが、利用者が意図して置いたものかもしれないので残す
+                if (component == null)
+                    return false;
+                if (component == this || component is Transform)
+                    continue;
+                return false;
+            }
+
+            return true;
         }
 
         /// <summary>

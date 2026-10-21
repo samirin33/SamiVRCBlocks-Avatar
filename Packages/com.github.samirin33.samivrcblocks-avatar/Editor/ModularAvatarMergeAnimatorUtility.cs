@@ -3,6 +3,7 @@ using UnityEditor;
 using UnityEditor.Animations;
 using UnityEngine;
 using nadena.dev.modular_avatar.core;
+using Samirin33.NDMF.Base;
 using Samirin33.NDMF.Components;
 using VRC.SDK3.Avatars.Components;
 
@@ -19,7 +20,14 @@ namespace Samirin33.NDMF.Components.Editor
             if (string.IsNullOrEmpty(controllerPath))
                 return null;
 
-            AssetDatabase.SaveAssets();
+            var controller = AssetDatabase.LoadAssetAtPath<AnimatorController>(controllerPath);
+
+            // ビルド中に保存・再インポートすると、無関係な dirty アセットまで書き出したりビルド中のアセット編集をまたいだりする。
+            if (SamirinBuildContext.IsBuilding)
+                return controller;
+
+            if (controller != null)
+                SamirinBuildContext.SaveIfPersistent(controller);
             AssetDatabase.ImportAsset(controllerPath, ImportAssetOptions.ForceUpdate);
             return AssetDatabase.LoadAssetAtPath<AnimatorController>(controllerPath);
         }
@@ -29,11 +37,68 @@ namespace Samirin33.NDMF.Components.Editor
             if (controller == null)
                 return null;
 
-            var controllerPath = AssetDatabase.GetAssetPath(controller);
-            if (string.IsNullOrEmpty(controllerPath))
+            // ビルド中に生成した Controller はメモリ上のまま使う（NDMF がビルド終了時に保存する）。
+            if (SamirinBuildContext.IsBuilding || !EditorUtility.IsPersistent(controller))
                 return controller;
 
-            return ReloadControllerAtPath(controllerPath);
+            return ReloadControllerAtPath(AssetDatabase.GetAssetPath(controller));
+        }
+
+        /// <summary>
+        /// 生成した Controller の後始末。手動生成（Assets に保存したもの）は保存して読み直し、
+        /// ビルド中のメモリ上の Controller はそのまま返す。
+        /// </summary>
+        public static AnimatorController FinalizeGeneratedController(AnimatorController controller)
+        {
+            if (controller == null)
+                return null;
+
+            if (SamirinBuildContext.IsBuilding || !EditorUtility.IsPersistent(controller))
+                return controller;
+
+            UnityEditorInternal.InternalEditorUtility.RepaintAllViews();
+            return ReloadControllerAtPath(AssetDatabase.GetAssetPath(controller));
+        }
+
+        /// <summary>
+        /// ビルド中はメモリ上に、手動生成時は manualAssetPath に（既存ファイルを置き換えて）生成用 Controller を作る。
+        /// </summary>
+        public static AnimatorController CreateGeneratedController(string name, string manualAssetPath)
+        {
+            if (!SamirinBuildContext.IsBuilding
+                && !string.IsNullOrEmpty(manualAssetPath)
+                && AssetDatabase.LoadAssetAtPath<AnimatorController>(manualAssetPath) != null)
+            {
+                AssetDatabase.DeleteAsset(manualAssetPath);
+            }
+
+            return SamirinBuildContext.CreateAnimatorController(name, manualAssetPath);
+        }
+
+        /// <summary>
+        /// GUID で参照する空クリップが無い環境向けの代替。ビルド中はメモリ上に作り、手動生成時は manualAssetPath に保存する。
+        /// </summary>
+        public static AnimationClip LoadOrCreateEmptyClip(string guid, string manualAssetPath)
+        {
+            var path = AssetDatabase.GUIDToAssetPath(guid);
+            if (!string.IsNullOrEmpty(path))
+            {
+                var loadedClip = AssetDatabase.LoadAssetAtPath<AnimationClip>(path);
+                if (loadedClip != null)
+                    return loadedClip;
+            }
+
+            if (SamirinBuildContext.IsBuilding || string.IsNullOrEmpty(manualAssetPath))
+                return new AnimationClip { name = "Empty" };
+
+            var emptyClip = AssetDatabase.LoadAssetAtPath<AnimationClip>(manualAssetPath);
+            if (emptyClip != null)
+                return emptyClip;
+
+            SamirinBuildContext.EnsureFolder(System.IO.Path.GetDirectoryName(manualAssetPath)?.Replace('\\', '/'));
+            emptyClip = new AnimationClip { name = System.IO.Path.GetFileNameWithoutExtension(manualAssetPath) };
+            AssetDatabase.CreateAsset(emptyClip, manualAssetPath);
+            return emptyClip;
         }
 
         public static GameObject RegisterMergeAnimatorModule(

@@ -1,7 +1,5 @@
-using System.Linq;
 using UnityEditor;
 using UnityEngine;
-using VRC.SDK3.Avatars.Components;
 using Samirin33.NDMF.Base.Editor;
 using Samirin33.NDMF.Components;
 
@@ -31,7 +29,7 @@ namespace Samirin33.NDMF.Components.Editor
             {
                 serializedObject.Update();
 
-                EditorGUILayout.HelpBox(
+                DrawHelpBoxWithDefaultFont(
                     "パラメーターの同期範囲や精度を削いでBit数を削減できます！",
                     MessageType.Info);
 
@@ -40,6 +38,11 @@ namespace Samirin33.NDMF.Components.Editor
                 if (_syncParamSettings != null)
                 {
                     DrawBulkSmoothWeightControls();
+
+                    var canEditArray = CanEditArrayStructure(serializedObject);
+                    var showSummary = !serializedObject.isEditingMultipleObjects;
+                    var pendingIndex = -1;
+                    var pendingAction = ArrayRowAction.None;
 
                     for (int i = 0; i < _syncParamSettings.arraySize; i++)
                     {
@@ -59,32 +62,13 @@ namespace Samirin33.NDMF.Components.Editor
                         EditorGUILayout.BeginVertical(EditorStyles.helpBox, GUILayout.ExpandWidth(true));
 
                         EditorGUILayout.BeginHorizontal();
-                        EditorGUILayout.LabelField(paramNameProp.stringValue);
+                        EditorGUILayout.LabelField(paramNameProp.hasMultipleDifferentValues ? "—" : paramNameProp.stringValue);
                         GUILayout.FlexibleSpace();
-                        EditorGUI.BeginDisabledGroup(i == 0);
-                        if (GUILayout.Button("↑", GUILayout.Width(24)))
+                        var action = DrawArrayRowButtons(i, _syncParamSettings.arraySize, canEditArray);
+                        if (action != ArrayRowAction.None)
                         {
-                            _syncParamSettings.MoveArrayElement(i, i - 1);
-                            EditorGUILayout.EndHorizontal();
-                            EditorGUILayout.EndVertical();
-                            break;
-                        }
-                        EditorGUI.EndDisabledGroup();
-                        EditorGUI.BeginDisabledGroup(i == _syncParamSettings.arraySize - 1);
-                        if (GUILayout.Button("↓", GUILayout.Width(24)))
-                        {
-                            _syncParamSettings.MoveArrayElement(i, i + 1);
-                            EditorGUILayout.EndHorizontal();
-                            EditorGUILayout.EndVertical();
-                            break;
-                        }
-                        EditorGUI.EndDisabledGroup();
-                        if (GUILayout.Button("削除", GUILayout.Width(50)))
-                        {
-                            _syncParamSettings.DeleteArrayElementAtIndex(i);
-                            EditorGUILayout.EndHorizontal();
-                            EditorGUILayout.EndVertical();
-                            break;
+                            pendingIndex = i;
+                            pendingAction = action;
                         }
                         EditorGUILayout.EndHorizontal();
 
@@ -93,22 +77,33 @@ namespace Samirin33.NDMF.Components.Editor
                         EditorGUILayout.PropertyField(paramTypeProp, new GUIContent("タイプ"));
                         var paramTypeChanged = EditorGUI.EndChangeCheck();
                         EditorGUILayout.PropertyField(bitTypeProp, new GUIContent("ビット数"));
-                        if ((ResizableSyncParameters.BitType)bitTypeProp.enumValueIndex == ResizableSyncParameters.BitType.Custom)
+                        if (!bitTypeProp.hasMultipleDifferentValues
+                            && (ResizableSyncParameters.BitType)bitTypeProp.enumValueIndex == ResizableSyncParameters.BitType.Custom)
                         {
-                            customBitCountProp.intValue = EditorGUILayout.IntSlider(
+                            EditorGUI.showMixedValue = customBitCountProp.hasMultipleDifferentValues;
+                            EditorGUI.BeginChangeCheck();
+                            var bitCount = EditorGUILayout.IntSlider(
                                 "カスタムBit数",
                                 customBitCountProp.intValue,
                                 ResizableSyncParameters.MinCustomBitCount,
                                 ResizableSyncParameters.MaxCustomBitCount);
+                            if (EditorGUI.EndChangeCheck())
+                                customBitCountProp.intValue = bitCount;
+                            EditorGUI.showMixedValue = false;
                         }
 
                         var paramType = (ResizableSyncParameters.ParamType)paramTypeProp.enumValueIndex;
-                        if (paramType == ResizableSyncParameters.ParamType.Int)
+                        if (paramTypeProp.hasMultipleDifferentValues)
+                        {
+                            DrawHelpBoxWithDefaultFont("タイプが異なる項目を同時に選択しています。", MessageType.None);
+                        }
+                        else if (paramType == ResizableSyncParameters.ParamType.Int)
                         {
                             EditorGUILayout.PropertyField(intRangePresetProp, new GUIContent("Int範囲"));
-                            if ((ResizableSyncParameters.IntRangePreset)intRangePresetProp.enumValueIndex == ResizableSyncParameters.IntRangePreset.Custom)
+                            if (!intRangePresetProp.hasMultipleDifferentValues
+                                && (ResizableSyncParameters.IntRangePreset)intRangePresetProp.enumValueIndex == ResizableSyncParameters.IntRangePreset.Custom)
                             {
-                                DrawIntCustomMin(customIntMinProp, element);
+                                DrawIntCustomMin(customIntMinProp, element, showSummary);
                             }
                         }
                         else
@@ -121,7 +116,8 @@ namespace Samirin33.NDMF.Components.Editor
                             if (paramTypeChanged)
                                 ApplyDefaultDivisionForFloatRange(floatRangePresetProp, divisionTypeProp);
 
-                            if ((ResizableSyncParameters.FloatRangePreset)floatRangePresetProp.enumValueIndex == ResizableSyncParameters.FloatRangePreset.Custom)
+                            if (!floatRangePresetProp.hasMultipleDifferentValues
+                                && (ResizableSyncParameters.FloatRangePreset)floatRangePresetProp.enumValueIndex == ResizableSyncParameters.FloatRangePreset.Custom)
                             {
                                 DrawCustomFloatRange(customFloatMinProp, customFloatMaxProp);
                             }
@@ -130,19 +126,22 @@ namespace Samirin33.NDMF.Components.Editor
                             EditorGUILayout.PropertyField(divisionTypeProp, new GUIContent("分割方式"));
                         }
 
-                        var description = GetParamDescription(paramType, element);
-                        if (!string.IsNullOrEmpty(description))
-                            EditorGUILayout.HelpBox(description, MessageType.None);
+                        if (showSummary)
+                        {
+                            var description = GetParamDescription(paramType, element);
+                            if (!string.IsNullOrEmpty(description))
+                                DrawHelpBoxWithDefaultFont(description, MessageType.None);
+                        }
 
                         var fireValueChangedTriggerProp = element.FindPropertyRelative("fireValueChangedTrigger");
                         EditorGUILayout.PropertyField(fireValueChangedTriggerProp, new GUIContent("値変化トリガー"));
-                        if (fireValueChangedTriggerProp != null && fireValueChangedTriggerProp.boolValue)
+                        if (showSummary && fireValueChangedTriggerProp != null && fireValueChangedTriggerProp.boolValue)
                         {
                             var triggerSourceName = string.IsNullOrEmpty(paramNameProp.stringValue)
                                 ? GetDefaultParamName(element)
                                 : paramNameProp.stringValue;
                             var triggerName = ResizableSyncParameters.GetValueChangedTriggerName(triggerSourceName);
-                            EditorGUILayout.HelpBox(
+                            DrawHelpBoxWithDefaultFont(
                                 "同期段が変わったフレームにトリガーが有効になります。読み込み直後の初期値では発行しません。",
                                 MessageType.None);
 
@@ -155,13 +154,13 @@ namespace Samirin33.NDMF.Components.Editor
                             var stepCount = GetMaxValue(element) + 1;
                             if (stepCount > 128)
                             {
-                                EditorGUILayout.HelpBox(
+                                DrawHelpBoxWithDefaultFont(
                                     $"同期段が {stepCount} あるため、トリガー用のステートも同数追加されます。",
                                     MessageType.Warning);
                             }
                         }
 
-                        if (paramType == ResizableSyncParameters.ParamType.Float)
+                        if (showSummary && paramType == ResizableSyncParameters.ParamType.Float)
                         {
                             var paramName = paramNameProp.stringValue;
                             if (string.IsNullOrEmpty(paramName))
@@ -169,7 +168,7 @@ namespace Samirin33.NDMF.Components.Editor
                             var snappedName = $"{paramName}_Snapped";
                             var smoothedName = $"{paramName}_Smoothed";
 
-                            EditorGUILayout.HelpBox(
+                            DrawHelpBoxWithDefaultFont(
                                 "分解能に合わせてスナップとスムージングされた数値を以下から取得できます。(Remoteでの結果はこれに一致します)",
                                 MessageType.None);
 
@@ -190,45 +189,19 @@ namespace Samirin33.NDMF.Components.Editor
                         EditorGUILayout.Space(3);
                     }
 
-                    if (GUILayout.Button("+ 追加"))
+                    ApplyArrayRowAction(_syncParamSettings, pendingIndex, pendingAction);
+
+                    using (new EditorGUI.DisabledScope(!canEditArray))
                     {
-                        _syncParamSettings.arraySize++;
-                        var newElement = _syncParamSettings.GetArrayElementAtIndex(_syncParamSettings.arraySize - 1);
-                        var bitTypeProp = newElement.FindPropertyRelative("bitType");
-                        if (bitTypeProp != null)
-                            bitTypeProp.enumValueIndex = (int)ResizableSyncParameters.BitType._4bit;
-                        var smoothWeightPropNew = newElement.FindPropertyRelative("smoothWeight");
-                        if (smoothWeightPropNew != null)
-                            smoothWeightPropNew.floatValue = 0.2f;
-                        var intRangePresetPropNew = newElement.FindPropertyRelative("intRangePreset");
-                        if (intRangePresetPropNew != null)
-                            intRangePresetPropNew.enumValueIndex = (int)ResizableSyncParameters.IntRangePreset.FromZero;
-                        var floatRangePresetPropNew = newElement.FindPropertyRelative("floatRangePreset");
-                        if (floatRangePresetPropNew != null)
-                            floatRangePresetPropNew.enumValueIndex = (int)ResizableSyncParameters.FloatRangePreset.ZeroToPlusOne;
-                        var customBitCountPropNew = newElement.FindPropertyRelative("customBitCount");
-                        if (customBitCountPropNew != null)
-                            customBitCountPropNew.intValue = 8;
-                        var customIntMinPropNew = newElement.FindPropertyRelative("customIntMin");
-                        if (customIntMinPropNew != null)
-                            customIntMinPropNew.intValue = 0;
-                        var customFloatMaxPropNew = newElement.FindPropertyRelative("customFloatMax");
-                        if (customFloatMaxPropNew != null)
-                            customFloatMaxPropNew.floatValue = 1f;
-                        var divisionTypePropNew = newElement.FindPropertyRelative("divisionType");
-                        if (divisionTypePropNew != null && floatRangePresetPropNew != null)
-                            ApplyDefaultDivisionForFloatRange(floatRangePresetPropNew, divisionTypePropNew);
+                        if (GUILayout.Button("+ 追加"))
+                            AddElement();
                     }
                 }
                 EditorGUILayout.EndVertical();
                 EditorGUILayout.Space(5);
 
                 EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-                EditorGUILayout.PropertyField(_matchAvatarWriteDefaults, new GUIContent("Write Defaultをアバターに合わせる"));
-                var matchAvatarWriteDefaults = _matchAvatarWriteDefaults != null && _matchAvatarWriteDefaults.boolValue;
-                EditorGUI.BeginDisabledGroup(matchAvatarWriteDefaults);
-                EditorGUILayout.PropertyField(_writeDefault, new GUIContent("生成されるステートのWrite Default"));
-                EditorGUI.EndDisabledGroup();
+                DrawWriteDefaultsSettings(_matchAvatarWriteDefaults, _writeDefault);
                 EditorGUILayout.PropertyField(_replaceWithSmoothedInAnimator, new GUIContent(
                     "Animator内のFloatパラメーターをSmoothedに置き換える",
                     "参照だけ {名前}_Smoothed に付け替えます。_Smoothed でない元パラメーターは残し、Parameter Driver の書き込み先は変えません。"));
@@ -248,57 +221,44 @@ namespace Samirin33.NDMF.Components.Editor
             });
         }
 
+        private void AddElement()
+        {
+            var index = _syncParamSettings.arraySize;
+            _syncParamSettings.InsertArrayElementAtIndex(index);
+            var newElement = _syncParamSettings.GetArrayElementAtIndex(index);
+            var bitTypeProp = newElement.FindPropertyRelative("bitType");
+            if (bitTypeProp != null)
+                bitTypeProp.enumValueIndex = (int)ResizableSyncParameters.BitType._4bit;
+            var smoothWeightPropNew = newElement.FindPropertyRelative("smoothWeight");
+            if (smoothWeightPropNew != null)
+                smoothWeightPropNew.floatValue = 0.2f;
+            var intRangePresetPropNew = newElement.FindPropertyRelative("intRangePreset");
+            if (intRangePresetPropNew != null)
+                intRangePresetPropNew.enumValueIndex = (int)ResizableSyncParameters.IntRangePreset.FromZero;
+            var floatRangePresetPropNew = newElement.FindPropertyRelative("floatRangePreset");
+            if (floatRangePresetPropNew != null)
+                floatRangePresetPropNew.enumValueIndex = (int)ResizableSyncParameters.FloatRangePreset.ZeroToPlusOne;
+            var customBitCountPropNew = newElement.FindPropertyRelative("customBitCount");
+            if (customBitCountPropNew != null)
+                customBitCountPropNew.intValue = 8;
+            var customIntMinPropNew = newElement.FindPropertyRelative("customIntMin");
+            if (customIntMinPropNew != null)
+                customIntMinPropNew.intValue = 0;
+            var customFloatMaxPropNew = newElement.FindPropertyRelative("customFloatMax");
+            if (customFloatMaxPropNew != null)
+                customFloatMaxPropNew.floatValue = 1f;
+            var divisionTypePropNew = newElement.FindPropertyRelative("divisionType");
+            if (divisionTypePropNew != null && floatRangePresetPropNew != null)
+                ApplyDefaultDivisionForFloatRange(floatRangePresetPropNew, divisionTypePropNew);
+        }
+
         private void ManualGenerateAnimator()
         {
-            var selected = targets.OfType<ResizableSyncParameters>().Where(c => c != null).ToArray();
-            if (selected.Length == 0)
-                return;
-
-            var avatarRoot = FindAvatarRoot(selected[0].transform);
-            if (avatarRoot == null)
-            {
-                EditorUtility.DisplayDialog(
-                    "ResizableSyncParameters",
-                    "親階層に VRCAvatarDescriptor が見つかりません。アバター配下に配置してから実行してください。",
-                    "OK");
-                return;
-            }
-
-            var all = avatarRoot.GetComponentsInChildren<ResizableSyncParameters>(true);
-            Undo.RegisterCompleteObjectUndo(all.Cast<Object>().ToArray(), "Manual Generate ResizableSyncParameters Animator");
-
-            var controllers = ResizableSyncParametersBuilder.BuildManual(avatarRoot, all);
-            AssetDatabase.SaveAssets();
-            AssetDatabase.Refresh();
-            SelectGeneratedAnimators(controllers);
-
-            // EditorUtility.DisplayDialog(
-            //     "ResizableSyncParameters",
-            //     "Animator を生成しました。",
-            //     "OK");
-        }
-
-        private static void SelectGeneratedAnimators(UnityEditor.Animations.AnimatorController[] controllers)
-        {
-            var objects = controllers?.Where(c => c != null).Cast<Object>().ToArray();
-            if (objects == null || objects.Length == 0)
-                return;
-
-            Selection.objects = objects;
-            EditorGUIUtility.PingObject(objects[0]);
-        }
-
-        private static GameObject FindAvatarRoot(Transform start)
-        {
-            var current = start;
-            while (current != null)
-            {
-                if (current.GetComponent<VRCAvatarDescriptor>() != null)
-                    return current.gameObject;
-                current = current.parent;
-            }
-
-            return null;
+            ManualGenerateAnimatorsPerAvatar<ResizableSyncParameters>(
+                targets,
+                "ResizableSyncParameters",
+                "Manual Generate ResizableSyncParameters Animator",
+                (avatarRoot, all) => ResizableSyncParametersBuilder.BuildManual(avatarRoot, all));
         }
 
         private void DrawBulkSmoothWeightControls()
@@ -307,24 +267,16 @@ namespace Samirin33.NDMF.Components.Editor
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
 
             EditorGUILayout.BeginHorizontal();
-            _bulkSmoothWeight = DrawSmoothWeightValue(_bulkSmoothWeight);
-            EditorGUI.BeginDisabledGroup(GetFloatElementCount() == 0);
-            if (GUILayout.Button("Floatに一括適用", GUILayout.Width(110)))
-                ApplyBulkSmoothWeight();
-            EditorGUI.EndDisabledGroup();
+            DrawSmoothWeightValue(null, ref _bulkSmoothWeight);
+            using (new EditorGUI.DisabledScope(GetFloatElementCount() == 0))
+            {
+                if (GUILayout.Button("Floatに一括適用", GUILayout.Width(110)))
+                    ApplyBulkSmoothWeight();
+            }
             EditorGUILayout.EndHorizontal();
 
             EditorGUILayout.EndVertical();
             EditorGUILayout.Space(5);
-        }
-
-        private static float DrawSmoothWeightValue(float value)
-        {
-            var label = new GUIContent("スムージング重み(高いほどゆっくり)");
-            if (value >= 1f)
-                return EditorGUILayout.FloatField(label, value);
-
-            return EditorGUILayout.Slider(label, value, 0f, 1f);
         }
 
         private int GetFloatElementCount()
@@ -334,7 +286,8 @@ namespace Samirin33.NDMF.Components.Editor
             {
                 var element = _syncParamSettings.GetArrayElementAtIndex(i);
                 var paramTypeProp = element.FindPropertyRelative("paramType");
-                if ((ResizableSyncParameters.ParamType)paramTypeProp.enumValueIndex == ResizableSyncParameters.ParamType.Float)
+                if (paramTypeProp.hasMultipleDifferentValues
+                    || (ResizableSyncParameters.ParamType)paramTypeProp.enumValueIndex == ResizableSyncParameters.ParamType.Float)
                     count++;
             }
             return count;
@@ -342,17 +295,33 @@ namespace Samirin33.NDMF.Components.Editor
 
         private void ApplyBulkSmoothWeight()
         {
-            for (int i = 0; i < _syncParamSettings.arraySize; i++)
+            // 複数選択時は配列長・タイプがターゲットごとに違うので、ターゲットごとに個別の SerializedObject で書き込む
+            serializedObject.ApplyModifiedProperties();
+            foreach (var t in targets)
             {
-                var element = _syncParamSettings.GetArrayElementAtIndex(i);
-                var paramTypeProp = element.FindPropertyRelative("paramType");
-                if ((ResizableSyncParameters.ParamType)paramTypeProp.enumValueIndex != ResizableSyncParameters.ParamType.Float)
+                if (t == null)
                     continue;
 
-                var smoothWeightProp = element.FindPropertyRelative("smoothWeight");
-                if (smoothWeightProp != null)
-                    smoothWeightProp.floatValue = _bulkSmoothWeight;
+                var so = new SerializedObject(t);
+                var settings = so.FindProperty("syncParamSettings");
+                if (settings == null)
+                    continue;
+
+                for (int i = 0; i < settings.arraySize; i++)
+                {
+                    var element = settings.GetArrayElementAtIndex(i);
+                    var paramTypeProp = element.FindPropertyRelative("paramType");
+                    if ((ResizableSyncParameters.ParamType)paramTypeProp.enumValueIndex != ResizableSyncParameters.ParamType.Float)
+                        continue;
+
+                    var smoothWeightProp = element.FindPropertyRelative("smoothWeight");
+                    if (smoothWeightProp != null)
+                        smoothWeightProp.floatValue = _bulkSmoothWeight;
+                }
+
+                so.ApplyModifiedProperties();
             }
+            serializedObject.Update();
         }
 
         private static string GetDefaultParamName(SerializedProperty element)
@@ -394,12 +363,13 @@ namespace Samirin33.NDMF.Components.Editor
             }
 
             var floatResolution = GetResolution(rangeMin, rangeMax, maxValue);
-            return $"{rangeMin}～{rangeMax}のFloatを同期できます。(分解能: {FormatResolution(floatResolution)}, {divisionLabel})";
+            return $"{rangeMin}～{rangeMax}のFloatを同期できます。(分解能: {FormatNumber(floatResolution)}, {divisionLabel})";
         }
 
         private static void ApplyDefaultDivisionForFloatRange(SerializedProperty floatRangePresetProp, SerializedProperty divisionTypeProp)
         {
             if (floatRangePresetProp == null || divisionTypeProp == null) return;
+            if (floatRangePresetProp.hasMultipleDifferentValues) return;
 
             switch ((ResizableSyncParameters.FloatRangePreset)floatRangePresetProp.enumValueIndex)
             {
@@ -414,9 +384,12 @@ namespace Samirin33.NDMF.Components.Editor
             }
         }
 
-        private static void DrawIntCustomMin(SerializedProperty minProp, SerializedProperty element)
+        private static void DrawIntCustomMin(SerializedProperty minProp, SerializedProperty element, bool showMax)
         {
             EditorGUILayout.PropertyField(minProp, new GUIContent("最小値"));
+            if (!showMax || minProp.hasMultipleDifferentValues)
+                return;
+
             var span = GetIntRangeSpan(element);
             EditorGUILayout.LabelField("最大値", (minProp.intValue + span).ToString());
         }
@@ -459,8 +432,10 @@ namespace Samirin33.NDMF.Components.Editor
         {
             EditorGUILayout.PropertyField(minProp, new GUIContent("最小値"));
             EditorGUILayout.PropertyField(maxProp, new GUIContent("最大値"));
-            if (minProp.floatValue >= maxProp.floatValue)
-                EditorGUILayout.HelpBox("最大値は最小値より大きくしてください。", MessageType.Warning);
+            if (!minProp.hasMultipleDifferentValues
+                && !maxProp.hasMultipleDifferentValues
+                && minProp.floatValue >= maxProp.floatValue)
+                DrawHelpBoxWithDefaultFont("最大値は最小値より大きくしてください。", MessageType.Warning);
         }
 
         private static (float min, float max) GetFloatCustomRange(float min, float max)
@@ -475,16 +450,6 @@ namespace Samirin33.NDMF.Components.Editor
             // 偶数: (max-min)/(2^bit-1) / 奇数: (max-min)/(2^bit-2)
             if (maxValue <= 0) return rangeMax - rangeMin;
             return (rangeMax - rangeMin) / maxValue;
-        }
-
-        private static string FormatResolution(float value)
-        {
-            var rounded = Mathf.Round(value);
-            if (Mathf.Approximately(value, rounded))
-                return rounded.ToString("0");
-
-            var text = value.ToString("0.######");
-            return text.TrimEnd('0').TrimEnd('.');
         }
 
         private static int GetMaxValue(SerializedProperty element)

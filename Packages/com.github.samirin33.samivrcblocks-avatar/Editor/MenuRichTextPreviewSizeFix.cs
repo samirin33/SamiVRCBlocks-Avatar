@@ -77,6 +77,25 @@ namespace Samirin33.Editor
             if (patch == null || harmonyMethodCtor == null)
                 throw new MissingMethodException("Harmony.Patch");
 
+            var unpatchAll = harmonyType.GetMethod("UnpatchAll", BindingFlags.Public | BindingFlags.Instance, null, new[] { typeof(string) }, null);
+            if (unpatchAll != null)
+            {
+                AssemblyReloadEvents.AssemblyReloadCallback uninstall = null;
+                uninstall = () =>
+                {
+                    AssemblyReloadEvents.beforeAssemblyReload -= uninstall;
+                    try
+                    {
+                        unpatchAll.Invoke(harmony, new object[] { HarmonyId });
+                    }
+                    catch (Exception)
+                    {
+                        // リロード直前の解除失敗でリロードを止めない
+                    }
+                };
+                AssemblyReloadEvents.beforeAssemblyReload += uninstall;
+            }
+
             TryPatch(
                 harmony,
                 patch,
@@ -215,9 +234,13 @@ namespace Samirin33.Editor
 
         /// <summary>
         /// IMGUI は &lt;size=80%&gt; を 80px として読む。描画引数だけを基準フォントの割合へ換算する。
+        /// EditorGUILayout.LabelField 全体へのパッチなので、MA Menu Item のリッチテキストプレビュー
+        /// （label が " " かつ richText のスタイル）以外の呼び出しには触れない。
         /// </summary>
-        public static void RewriteImguiPercentSize(ref string label2, GUIStyle style)
+        public static void RewriteImguiPercentSize(string label, ref string label2, GUIStyle style)
         {
+            if (label != " " || style == null || !style.richText)
+                return;
             if (string.IsNullOrEmpty(label2) || label2.IndexOf('%') < 0)
                 return;
             if (label2.IndexOf("<size", StringComparison.OrdinalIgnoreCase) < 0)
@@ -225,7 +248,7 @@ namespace Samirin33.Editor
 
             try
             {
-                var baseFont = style != null && style.fontSize > 0 ? style.fontSize : 12;
+                var baseFont = style.fontSize > 0 ? style.fontSize : 12;
                 label2 = SizePercentTag.Replace(label2, match =>
                 {
                     if (!float.TryParse(match.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var percent))
@@ -267,18 +290,67 @@ namespace Samirin33.Editor
             EnsureWatch();
         }
 
+        // Gesture Manager は Play 中にだけメニューを描く。ウィンドウ走査は重いので Play 中だけ、一定間隔で行う。
+        private const double WatchIntervalSeconds = 0.5;
+        private static double _nextWatchTime;
+        private static bool _updateSubscribed;
+
         private static void EnsureWatch()
         {
             if (_watching)
                 return;
             _watching = true;
+            EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
+            AssemblyReloadEvents.beforeAssemblyReload += StopWatch;
+            if (EditorApplication.isPlaying)
+                SubscribeUpdate();
+        }
+
+        private static void OnPlayModeStateChanged(PlayModeStateChange change)
+        {
+            if (change == PlayModeStateChange.EnteredPlayMode)
+                SubscribeUpdate();
+            else if (change == PlayModeStateChange.ExitingPlayMode)
+                UnsubscribeUpdate();
+        }
+
+        private static void SubscribeUpdate()
+        {
+            if (_updateSubscribed)
+                return;
+            _updateSubscribed = true;
+            _nextWatchTime = 0;
             EditorApplication.update += WatchGestureManagerFonts;
+        }
+
+        private static void UnsubscribeUpdate()
+        {
+            if (!_updateSubscribed)
+                return;
+            _updateSubscribed = false;
+            EditorApplication.update -= WatchGestureManagerFonts;
+        }
+
+        private static void StopWatch()
+        {
+            UnsubscribeUpdate();
+            EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
+            AssemblyReloadEvents.beforeAssemblyReload -= StopWatch;
+            _watching = false;
         }
 
         private static void WatchGestureManagerFonts()
         {
             if (!EditorApplication.isPlaying)
+            {
+                UnsubscribeUpdate();
                 return;
+            }
+
+            var now = EditorApplication.timeSinceStartup;
+            if (now < _nextWatchTime)
+                return;
+            _nextWatchTime = now + WatchIntervalSeconds;
 
             try
             {

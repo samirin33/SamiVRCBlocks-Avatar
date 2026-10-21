@@ -18,10 +18,13 @@ namespace Samirin33.NDMF.Components.Editor
         private const string PrefsKeyBoneToggles = PrefsKeyPrefix + "BoneToggles";
         private const string PrefsKeyFingerToggles = PrefsKeyPrefix + "FingerToggles";
         private const string PrefsKeyPlayerFollow = PrefsKeyPrefix + "PlayerFollow";
+        private const string PrefsKeyGroupPrefix = PrefsKeyPrefix + "Group.";
+        private const string RootGroupKey = "Root";
+        private const string OtherGroupKey = "Other";
 
-        private static readonly (string label, HumanBodyBones[] bones)[] BoneGroups =
+        private static readonly (string key, string label, HumanBodyBones[] bones)[] BoneGroups =
         {
-            ("Body", new[]
+            ("Body", "体", new[]
             {
                 HumanBodyBones.Hips,
                 HumanBodyBones.Spine,
@@ -30,27 +33,27 @@ namespace Samirin33.NDMF.Components.Editor
                 HumanBodyBones.Neck,
                 HumanBodyBones.Head,
             }),
-            ("Eyes", new[]
+            ("Eyes", "目・顎", new[]
             {
                 HumanBodyBones.LeftEye,
                 HumanBodyBones.RightEye,
                 HumanBodyBones.Jaw,
             }),
-            ("Left Arm", new[]
+            ("Left Arm", "左腕", new[]
             {
                 HumanBodyBones.LeftShoulder,
                 HumanBodyBones.LeftUpperArm,
                 HumanBodyBones.LeftLowerArm,
                 HumanBodyBones.LeftHand,
             }),
-            ("Right Arm", new[]
+            ("Right Arm", "右腕", new[]
             {
                 HumanBodyBones.RightShoulder,
                 HumanBodyBones.RightUpperArm,
                 HumanBodyBones.RightLowerArm,
                 HumanBodyBones.RightHand,
             }),
-            ("Left Fingers", new[]
+            ("Left Fingers", "左手の指", new[]
             {
                 HumanBodyBones.LeftThumbProximal,
                 HumanBodyBones.LeftThumbIntermediate,
@@ -68,7 +71,7 @@ namespace Samirin33.NDMF.Components.Editor
                 HumanBodyBones.LeftLittleIntermediate,
                 HumanBodyBones.LeftLittleDistal,
             }),
-            ("Right Fingers", new[]
+            ("Right Fingers", "右手の指", new[]
             {
                 HumanBodyBones.RightThumbProximal,
                 HumanBodyBones.RightThumbIntermediate,
@@ -86,14 +89,14 @@ namespace Samirin33.NDMF.Components.Editor
                 HumanBodyBones.RightLittleIntermediate,
                 HumanBodyBones.RightLittleDistal,
             }),
-            ("Left Leg", new[]
+            ("Left Leg", "左脚", new[]
             {
                 HumanBodyBones.LeftUpperLeg,
                 HumanBodyBones.LeftLowerLeg,
                 HumanBodyBones.LeftFoot,
                 HumanBodyBones.LeftToes,
             }),
-            ("Right Leg", new[]
+            ("Right Leg", "右脚", new[]
             {
                 HumanBodyBones.RightUpperLeg,
                 HumanBodyBones.RightLowerLeg,
@@ -104,8 +107,11 @@ namespace Samirin33.NDMF.Components.Editor
 
         private static readonly HashSet<string> DefaultOpenGroups = new HashSet<string>
         {
-            "Root", "Body", "Left Arm", "Right Arm", "Left Leg", "Right Leg", "Other",
+            RootGroupKey, "Body", "Left Arm", "Right Arm", "Left Leg", "Right Leg", OtherGroupKey,
         };
+
+        private static string[] _humanoidBoneOptions;
+        private static int[] _humanoidBoneValues;
 
         private SerializedProperty _links;
         private SerializedProperty _playerFollowObjects;
@@ -114,6 +120,21 @@ namespace Samirin33.NDMF.Components.Editor
         private SerializedProperty _editorFollowHumanoid;
         private SerializedProperty _sourceApplyEnabled;
         private SerializedProperty _boneApply;
+
+        private static readonly GUIContent HeadChopGlobalScaleContent = new GUIContent(
+            "頭部縮小の倍率",
+            "VRC Head Chop の Global Scale Factor。一人称視点で頭を縮小するときの倍率です。");
+        private static readonly GUIContent EditorFollowContent = new GUIContent(
+            "エディタ上で追従",
+            "オンのとき、再生していないエディタ上でも制御用オブジェクトをヒューマノイドのボーンに追従させます。");
+        private static readonly GUIContent AddHeadChopContent = new GUIContent(
+            "Head Chop を追加",
+            "ビルド時に頭へ VRC Head Chop を追加します。");
+
+        private Animator _avatarAnimator;
+        private VRCAvatarDescriptor _avatarDescriptor;
+        private bool _avatarResolved;
+        private readonly Dictionary<int, List<HumanBodyBones>> _childrenCache = new Dictionary<int, List<HumanBodyBones>>();
 
         private void OnEnable()
         {
@@ -124,6 +145,58 @@ namespace Samirin33.NDMF.Components.Editor
             _editorFollowHumanoid = serializedObject.FindProperty(nameof(ControllableHumanoid.editorFollowHumanoid));
             _sourceApplyEnabled = serializedObject.FindProperty(nameof(ControllableHumanoid.sourceApplyEnabled));
             _boneApply = serializedObject.FindProperty(nameof(ControllableHumanoid.boneApply));
+
+            InvalidateAvatarCache();
+            EditorApplication.hierarchyChanged += InvalidateAvatarCache;
+        }
+
+        private void OnDisable()
+        {
+            EditorApplication.hierarchyChanged -= InvalidateAvatarCache;
+        }
+
+        private void InvalidateAvatarCache()
+        {
+            _avatarResolved = false;
+            _avatarAnimator = null;
+            _avatarDescriptor = null;
+            _childrenCache.Clear();
+        }
+
+        private void ResolveAvatar()
+        {
+            if (_avatarResolved)
+                return;
+
+            _avatarResolved = true;
+            var component = target as ControllableHumanoid;
+            var avatarRoot = component != null ? RuntimeUtil.FindAvatarInParents(component.transform) : null;
+            if (avatarRoot == null)
+                return;
+
+            avatarRoot.TryGetComponent(out _avatarAnimator);
+            avatarRoot.TryGetComponent(out _avatarDescriptor);
+        }
+
+        /// <returns>Humanoid Animator が無いときは null。</returns>
+        private List<HumanBodyBones> GetDirectHumanoidChildren(bool parentIsRoot, HumanBodyBones parentBone)
+        {
+            ResolveAvatar();
+            if (_avatarAnimator == null || !_avatarAnimator.isHuman)
+                return null;
+
+            var key = parentIsRoot ? -1 : (int)parentBone;
+            if (!_childrenCache.TryGetValue(key, out var children))
+            {
+                children = ControllableHumanoidProcessor.CollectDirectHumanoidChildren(
+                    _avatarAnimator,
+                    _avatarDescriptor,
+                    parentIsRoot,
+                    parentBone);
+                _childrenCache[key] = children;
+            }
+
+            return children;
         }
 
         public override void OnInspectorGUI()
@@ -135,8 +208,8 @@ namespace Samirin33.NDMF.Components.Editor
                 EditorGUILayout.BeginVertical(EditorStyles.helpBox);
                 EditorGUILayout.LabelField("Animatorで制御できます", EditorStyles.miniLabel);
                 EditorGUILayout.PropertyField(_sourceApplyEnabled, new GUIContent("ポーズ反映トグル"));
-                if (_addHeadChop != null && _addHeadChop.boolValue)
-                    EditorGUILayout.Slider(_headChopGlobalScaleFactor, 0f, 1f, new GUIContent("Global Scale Factor"));
+                if (_addHeadChop != null && (_addHeadChop.boolValue || _addHeadChop.hasMultipleDifferentValues))
+                    EditorGUILayout.Slider(_headChopGlobalScaleFactor, 0f, 1f, HeadChopGlobalScaleContent);
                 var boneToggleOpen = GetFoldout(PrefsKeyBoneToggles, false);
                 var newBoneToggleOpen = EditorGUILayout.Foldout(boneToggleOpen, "個別トグル", true);
                 if (newBoneToggleOpen != boneToggleOpen)
@@ -160,8 +233,8 @@ namespace Samirin33.NDMF.Components.Editor
                 DrawPlayerFollowObjects();
 
                 EditorGUILayout.Space(8);
-                EditorGUILayout.PropertyField(_editorFollowHumanoid, new GUIContent("Editor Follow"));
-                EditorGUILayout.PropertyField(_addHeadChop, new GUIContent("Add Head Chop"));
+                EditorGUILayout.PropertyField(_editorFollowHumanoid, EditorFollowContent);
+                EditorGUILayout.PropertyField(_addHeadChop, AddHeadChopContent);
 
                 serializedObject.ApplyModifiedProperties();
             });
@@ -324,10 +397,9 @@ namespace Samirin33.NDMF.Components.Editor
         private void DrawFingerHand(Rect area, bool left)
         {
             var title = left ? "L" : "R";
-            var titleStyle = new GUIStyle(EditorStyles.boldLabel) { alignment = TextAnchor.MiddleCenter };
             var previousColor = GUI.color;
             GUI.color = left ? new Color(0.45f, 0.72f, 0.95f) : new Color(0.95f, 0.62f, 0.4f);
-            GUI.Label(new Rect(area.x, area.y, area.width, 18f), title, titleStyle);
+            GUI.Label(new Rect(area.x, area.y, area.width, 18f), title, FingerTitleStyle);
             GUI.color = previousColor;
 
             var hand = new Rect(area.x, area.y + 18f, area.width, area.height - 18f);
@@ -363,14 +435,39 @@ namespace Samirin33.NDMF.Components.Editor
             return left ? point : new Vector2(1f - point.x, point.y);
         }
 
+        private static GUIStyle _fingerTitleStyle;
+        private static GUIStyle FingerTitleStyle =>
+            _fingerTitleStyle ??= new GUIStyle(EditorStyles.boldLabel) { alignment = TextAnchor.MiddleCenter };
+
+        private static HashSet<HumanBodyBones> _fingerBones;
+
         private static bool IsFingerBone(HumanBodyBones bone)
         {
-            var name = bone.ToString();
-            return name.Contains("Thumb")
-                || name.Contains("Index")
-                || name.Contains("Middle")
-                || name.Contains("Ring")
-                || name.Contains("Little");
+            if (_fingerBones == null)
+            {
+                _fingerBones = new HashSet<HumanBodyBones>();
+                foreach (var chain in LeftFingers)
+                    _fingerBones.UnionWith(chain);
+                foreach (var chain in RightFingers)
+                    _fingerBones.UnionWith(chain);
+            }
+
+            return _fingerBones.Contains(bone);
+        }
+
+        private static readonly Dictionary<HumanBodyBones, (string name, GUIContent tooltip, GUIContent label)> BoneContents =
+            new Dictionary<HumanBodyBones, (string, GUIContent, GUIContent)>();
+
+        private static (string name, GUIContent tooltip, GUIContent label) GetBoneContent(HumanBodyBones bone)
+        {
+            if (!BoneContents.TryGetValue(bone, out var content))
+            {
+                var name = bone.ToString();
+                content = (name, new GUIContent(string.Empty, name), new GUIContent(name));
+                BoneContents[bone] = content;
+            }
+
+            return content;
         }
 
         private static readonly HumanBodyBones[][] LeftFingers =
@@ -402,7 +499,8 @@ namespace Samirin33.NDMF.Components.Editor
 
         private void DrawBoneToggle(Rect figure, HumanBodyBones bone, Vector2 normalized, bool showName = true)
         {
-            var property = _boneApply.FindPropertyRelative(bone.ToString());
+            var content = GetBoneContent(bone);
+            var property = _boneApply.FindPropertyRelative(content.name);
             if (property == null)
                 return;
 
@@ -418,27 +516,28 @@ namespace Samirin33.NDMF.Components.Editor
                     : 16f;
             var rect = new Rect(center.x - size * 0.5f, center.y - size * 0.5f, size, size);
             var on = property.boolValue;
-            var name = bone.ToString();
             var previous = GUI.backgroundColor;
-            GUI.backgroundColor = on ? BoneOnColor(bone) : new Color(0.28f, 0.28f, 0.28f);
-            if (GUI.Button(rect, new GUIContent(string.Empty, name)))
-                property.boolValue = !on;
+            GUI.backgroundColor = property.hasMultipleDifferentValues
+                ? new Color(0.6f, 0.6f, 0.6f)
+                : on ? BoneOnColor(bone) : new Color(0.28f, 0.28f, 0.28f);
+            if (GUI.Button(rect, content.tooltip))
+                property.boolValue = property.hasMultipleDifferentValues || !on;
             GUI.backgroundColor = previous;
 
             if (!showName)
                 return;
 
-            var labelSize = EditorStyles.miniLabel.CalcSize(new GUIContent(name));
+            var labelSize = EditorStyles.miniLabel.CalcSize(content.label);
             var labelOnLeft = normalized.x < 0.5f;
             var labelRect = labelOnLeft
                 ? new Rect(rect.x - labelSize.x - 2f, rect.y + (rect.height - labelSize.y) * 0.5f, labelSize.x, labelSize.y)
                 : new Rect(rect.xMax + 2f, rect.y + (rect.height - labelSize.y) * 0.5f, labelSize.x, labelSize.y);
-            GUI.Label(labelRect, name, EditorStyles.miniLabel);
+            GUI.Label(labelRect, content.label, EditorStyles.miniLabel);
         }
 
         private static Color BoneOnColor(HumanBodyBones bone)
         {
-            var name = bone.ToString();
+            var name = GetBoneContent(bone).name;
             if (name.StartsWith("Left", StringComparison.Ordinal))
                 return new Color(0.45f, 0.72f, 0.95f);
             if (name.StartsWith("Right", StringComparison.Ordinal))
@@ -482,6 +581,9 @@ namespace Samirin33.NDMF.Components.Editor
 
             EditorGUI.indentLevel++;
 
+            var canEditArray = CanEditArrayStructure(serializedObject);
+            var removeIndex = -1;
+
             if (count > 0)
             {
                 EditorGUILayout.BeginHorizontal();
@@ -499,15 +601,11 @@ namespace Samirin33.NDMF.Components.Editor
 
                 if (rootIndices.Count > 0)
                 {
-                    if (DrawGroupFoldout("Root", rootIndices, drawn))
-                    {
-                        EditorGUI.indentLevel--;
-                        return;
-                    }
+                    DrawGroupFoldout(RootGroupKey, "ルート", rootIndices, drawn, canEditArray, ref removeIndex);
                     EditorGUILayout.Space(2);
                 }
 
-                foreach (var (label, bones) in BoneGroups)
+                foreach (var (key, label, bones) in BoneGroups)
                 {
                     var indices = new List<int>();
                     foreach (var bone in bones)
@@ -519,11 +617,7 @@ namespace Samirin33.NDMF.Components.Editor
                     if (indices.Count == 0)
                         continue;
 
-                    if (DrawGroupFoldout(label, indices, drawn))
-                    {
-                        EditorGUI.indentLevel--;
-                        return;
-                    }
+                    DrawGroupFoldout(key, label, indices, drawn, canEditArray, ref removeIndex);
                     EditorGUILayout.Space(2);
                 }
 
@@ -535,29 +629,36 @@ namespace Samirin33.NDMF.Components.Editor
                 }
 
                 if (otherIndices.Count > 0)
-                    if (DrawGroupFoldout("Other", otherIndices, drawn))
-                    {
-                        EditorGUI.indentLevel--;
-                        return;
-                    }
+                    DrawGroupFoldout(OtherGroupKey, "その他", otherIndices, drawn, canEditArray, ref removeIndex);
             }
 
-            if (GUILayout.Button("追加"))
+            if (removeIndex >= 0)
+                ApplyArrayRowAction(_links, removeIndex, ArrayRowAction.Remove);
+
+            using (new EditorGUI.DisabledScope(!canEditArray))
             {
-                var index = _links.arraySize;
-                _links.InsertArrayElementAtIndex(index);
-                var entry = _links.GetArrayElementAtIndex(index);
-                entry.FindPropertyRelative(nameof(ControllableHumanoid.BoneLinkEntry.parentIsRoot)).boolValue = true;
-                entry.FindPropertyRelative(nameof(ControllableHumanoid.BoneLinkEntry.parentBone)).enumValueIndex =
-                    (int)HumanBodyBones.Hips;
-                entry.FindPropertyRelative(nameof(ControllableHumanoid.BoneLinkEntry.parentChild)).objectReferenceValue = null;
-                entry.FindPropertyRelative(nameof(ControllableHumanoid.BoneLinkEntry.shareChildParent)).boolValue = false;
-                entry.FindPropertyRelative(nameof(ControllableHumanoid.BoneLinkEntry.childParent)).objectReferenceValue = null;
-                entry.FindPropertyRelative(nameof(ControllableHumanoid.BoneLinkEntry.keepLocal)).boolValue = true;
-                entry.FindPropertyRelative(nameof(ControllableHumanoid.BoneLinkEntry.childParents)).ClearArray();
+                if (GUILayout.Button("追加"))
+                    AddLink();
             }
 
             EditorGUI.indentLevel--;
+        }
+
+        private void AddLink()
+        {
+            var index = _links.arraySize;
+            _links.InsertArrayElementAtIndex(index);
+            var entry = _links.GetArrayElementAtIndex(index);
+            var parentIsRoot = entry.FindPropertyRelative(nameof(ControllableHumanoid.BoneLinkEntry.parentIsRoot));
+            var parentBone = entry.FindPropertyRelative(nameof(ControllableHumanoid.BoneLinkEntry.parentBone));
+            parentIsRoot.boolValue = true;
+            parentBone.enumValueIndex = (int)HumanBodyBones.Hips;
+            entry.FindPropertyRelative(nameof(ControllableHumanoid.BoneLinkEntry.parentChild)).objectReferenceValue = null;
+            entry.FindPropertyRelative(nameof(ControllableHumanoid.BoneLinkEntry.shareChildParent)).boolValue = false;
+            entry.FindPropertyRelative(nameof(ControllableHumanoid.BoneLinkEntry.childParent)).objectReferenceValue = null;
+            entry.FindPropertyRelative(nameof(ControllableHumanoid.BoneLinkEntry.keepLocal)).boolValue = true;
+            entry.FindPropertyRelative(nameof(ControllableHumanoid.BoneLinkEntry.childParents)).ClearArray();
+            SyncChildParentSlots(entry, parentIsRoot, parentBone);
         }
 
         private void DrawPlayerFollowObjects()
@@ -571,6 +672,8 @@ namespace Samirin33.NDMF.Components.Editor
                 return;
 
             EditorGUI.indentLevel++;
+            var canEditArray = CanEditArrayStructure(serializedObject);
+            var removeIndex = -1;
             for (var i = 0; i < _playerFollowObjects.arraySize; i++)
             {
                 var entry = _playerFollowObjects.GetArrayElementAtIndex(i);
@@ -580,30 +683,38 @@ namespace Samirin33.NDMF.Components.Editor
                 EditorGUILayout.BeginHorizontal();
                 DrawHumanoidBonePopup(bone);
                 EditorGUILayout.PropertyField(target, GUIContent.none);
-                if (GUILayout.Button("削除", EditorStyles.miniButton, GUILayout.Width(40)))
+                using (new EditorGUI.DisabledScope(!canEditArray))
                 {
-                    _playerFollowObjects.DeleteArrayElementAtIndex(i);
-                    EditorGUILayout.EndHorizontal();
-                    break;
+                    if (GUILayout.Button("削除", EditorStyles.miniButton, GUILayout.Width(40)))
+                        removeIndex = i;
                 }
                 EditorGUILayout.EndHorizontal();
             }
 
-            if (GUILayout.Button("追加"))
+            if (removeIndex >= 0)
+                ApplyArrayRowAction(_playerFollowObjects, removeIndex, ArrayRowAction.Remove);
+
+            using (new EditorGUI.DisabledScope(!canEditArray))
             {
-                var index = _playerFollowObjects.arraySize;
-                _playerFollowObjects.InsertArrayElementAtIndex(index);
-                var entry = _playerFollowObjects.GetArrayElementAtIndex(index);
-                entry.FindPropertyRelative(nameof(ControllableHumanoid.PlayerFollowEntry.bone)).enumValueIndex =
-                    (int)HumanBodyBones.Head;
-                entry.FindPropertyRelative(nameof(ControllableHumanoid.PlayerFollowEntry.target)).objectReferenceValue = null;
+                if (GUILayout.Button("追加"))
+                {
+                    var index = _playerFollowObjects.arraySize;
+                    _playerFollowObjects.InsertArrayElementAtIndex(index);
+                    var entry = _playerFollowObjects.GetArrayElementAtIndex(index);
+                    entry.FindPropertyRelative(nameof(ControllableHumanoid.PlayerFollowEntry.bone)).enumValueIndex =
+                        (int)HumanBodyBones.Head;
+                    entry.FindPropertyRelative(nameof(ControllableHumanoid.PlayerFollowEntry.target)).objectReferenceValue = null;
+                }
             }
             EditorGUI.indentLevel--;
         }
 
-        private static void DrawHumanoidBonePopup(SerializedProperty bone)
+        private static void EnsureHumanoidBoneOptions(SerializedProperty enumProperty)
         {
-            var names = bone.enumDisplayNames;
+            if (_humanoidBoneOptions != null)
+                return;
+
+            var names = enumProperty.enumDisplayNames;
             var options = new List<string>();
             var values = new List<int>();
             for (var i = 0; i < names.Length; i++)
@@ -614,42 +725,64 @@ namespace Samirin33.NDMF.Components.Editor
                 values.Add(i);
             }
 
-            var current = bone.enumValueIndex;
-            var selected = 0;
-            for (var i = 0; i < values.Count; i++)
-            {
-                if (values[i] == current)
-                {
-                    selected = i;
-                    break;
-                }
-            }
-
-            var next = EditorGUILayout.Popup(selected, options.ToArray(), GUILayout.Width(140));
-            bone.enumValueIndex = values[next];
+            _humanoidBoneOptions = options.ToArray();
+            _humanoidBoneValues = values.ToArray();
         }
 
-        private bool DrawGroupFoldout(string label, List<int> indices, HashSet<int> drawn)
+        private static void DrawHumanoidBonePopup(SerializedProperty bone)
         {
-            var key = PrefsKeyPrefix + label;
-            var open = GetFoldout(key, DefaultOpenGroups.Contains(label));
+            EnsureHumanoidBoneOptions(bone);
+
+            var current = bone.enumValueIndex;
+            var selected = Array.IndexOf(_humanoidBoneValues, current);
+            var options = _humanoidBoneOptions;
+            if (selected < 0)
+            {
+                // 一覧外の値は選択肢に追加して表示し、触らない限り書き換えない
+                options = new string[_humanoidBoneOptions.Length + 1];
+                options[0] = BoneLabel(bone);
+                Array.Copy(_humanoidBoneOptions, 0, options, 1, _humanoidBoneOptions.Length);
+            }
+
+            var showIndex = selected < 0 ? 0 : selected;
+            EditorGUI.showMixedValue = bone.hasMultipleDifferentValues;
+            EditorGUI.BeginChangeCheck();
+            var next = EditorGUILayout.Popup(showIndex, options, GUILayout.Width(140));
+            var changed = EditorGUI.EndChangeCheck();
+            EditorGUI.showMixedValue = false;
+            if (!changed)
+                return;
+
+            var valueIndex = selected < 0 ? next - 1 : next;
+            if (valueIndex >= 0 && valueIndex < _humanoidBoneValues.Length)
+                bone.enumValueIndex = _humanoidBoneValues[valueIndex];
+        }
+
+        private void DrawGroupFoldout(
+            string key,
+            string label,
+            List<int> indices,
+            HashSet<int> drawn,
+            bool canEditArray,
+            ref int removeIndex)
+        {
+            var prefsKey = PrefsKeyGroupPrefix + key;
+            var open = GetFoldout(prefsKey, DefaultOpenGroups.Contains(key));
             var newOpen = EditorGUILayout.Foldout(open, $"{label} ({indices.Count})", true);
             if (newOpen != open)
-                SetFoldout(key, newOpen);
+                SetFoldout(prefsKey, newOpen);
 
             foreach (var index in indices)
                 drawn.Add(index);
 
             if (!newOpen)
-                return false;
+                return;
 
             foreach (var index in indices)
             {
-                if (DrawLinkEntry(index))
-                    return true;
+                if (DrawLinkEntry(index, canEditArray))
+                    removeIndex = index;
             }
-
-            return false;
         }
 
         private void CollectLinkIndices(
@@ -684,7 +817,8 @@ namespace Samirin33.NDMF.Components.Editor
             }
         }
 
-        private bool DrawLinkEntry(int index)
+        /// <returns>削除ボタンが押されたとき true（削除は呼び出し側で描画後に行う）。</returns>
+        private bool DrawLinkEntry(int index, bool canEditArray)
         {
             var entry = _links.GetArrayElementAtIndex(index);
             var parentIsRoot = entry.FindPropertyRelative(nameof(ControllableHumanoid.BoneLinkEntry.parentIsRoot));
@@ -694,7 +828,9 @@ namespace Samirin33.NDMF.Components.Editor
             var childParent = entry.FindPropertyRelative(nameof(ControllableHumanoid.BoneLinkEntry.childParent));
             var keepLocal = entry.FindPropertyRelative(nameof(ControllableHumanoid.BoneLinkEntry.keepLocal));
 
-            var parentName = parentIsRoot.boolValue ? "Root" : BoneLabel(parentBone);
+            var parentName = parentIsRoot.hasMultipleDifferentValues || parentBone.hasMultipleDifferentValues
+                ? "—"
+                : parentIsRoot.boolValue ? "ルート" : BoneLabel(parentBone);
             var keepLocalContent = new GUIContent(
                 "ローカルを保持",
                 "オンのとき、付け替え前のワールド位置・回転・スケールを維持します。Armature のスケールが 1 でないモデルでも子が原点に潰れません。オフのとき、childParent との間にローカル座標を打ち消すオブジェクトを挟み、合成結果を位置 0、回転 0、スケール 1 にします。親のスケールが付け替え前と違うときは、オリジナルのスケールへ補正します。");
@@ -704,32 +840,40 @@ namespace Samirin33.NDMF.Components.Editor
             EditorGUILayout.BeginHorizontal();
             EditorGUILayout.LabelField($"{parentName} の子", EditorStyles.boldLabel);
             GUILayout.FlexibleSpace();
-            if (GUILayout.Button("削除", EditorStyles.miniButton, GUILayout.Width(40)))
+            var removeClicked = false;
+            using (new EditorGUI.DisabledScope(!canEditArray))
             {
-                _links.DeleteArrayElementAtIndex(index);
-                EditorGUILayout.EndHorizontal();
-                EditorGUILayout.EndVertical();
-                return true;
+                if (GUILayout.Button("削除", EditorStyles.miniButton, GUILayout.Width(40)))
+                    removeClicked = true;
             }
             EditorGUILayout.EndHorizontal();
 
-            DrawBonePopup("親", parentIsRoot, parentBone, includeRoot: true);
+            var parentChanged = DrawBonePopup("親", parentIsRoot, parentBone, includeRoot: true);
             EditorGUILayout.PropertyField(parentChild, new GUIContent($"{parentName} Child"));
-            EditorGUILayout.PropertyField(shareChildParent, new GUIContent("まとめて指定"));
 
-            if (shareChildParent.boolValue)
+            EditorGUI.BeginChangeCheck();
+            EditorGUILayout.PropertyField(shareChildParent, new GUIContent("まとめて指定"));
+            var shareChanged = EditorGUI.EndChangeCheck();
+
+            if (shareChildParent.hasMultipleDifferentValues)
+            {
+                DrawHelpBoxWithDefaultFont("選択中のオブジェクトで「まとめて指定」の値が異なるため、子ごとの設定は表示していません。", MessageType.Info);
+            }
+            else if (shareChildParent.boolValue)
             {
                 EditorGUILayout.PropertyField(childParent, new GUIContent("子 Parent"));
                 EditorGUILayout.PropertyField(keepLocal, keepLocalContent);
             }
             else
             {
+                if ((parentChanged || shareChanged) && serializedObject.targetObjects.Length == 1)
+                    SyncChildParentSlots(entry, parentIsRoot, parentBone);
                 DrawPerChildParents(entry, parentIsRoot, parentBone, keepLocalContent);
             }
 
             EditorGUILayout.EndVertical();
             EditorGUILayout.Space(1);
-            return false;
+            return removeClicked;
         }
 
         private void DrawPerChildParents(
@@ -738,34 +882,33 @@ namespace Samirin33.NDMF.Components.Editor
             SerializedProperty parentBone,
             GUIContent keepLocalContent)
         {
-            var component = target as ControllableHumanoid;
-            var avatarRoot = component != null ? RuntimeUtil.FindAvatarInParents(component.transform) : null;
-            Animator animator = null;
-            VRCAvatarDescriptor descriptor = null;
-            if (avatarRoot != null)
+            if (serializedObject.targetObjects.Length > 1)
             {
-                avatarRoot.TryGetComponent(out animator);
-                avatarRoot.TryGetComponent(out descriptor);
+                // 子ボーン一覧はアバターごとに異なるため、複数選択時は子ごとの設定を編集させない
+                DrawHelpBoxWithDefaultFont("複数選択中は子ごとの設定を表示できません。1 つだけ選択してください。", MessageType.Info);
+                return;
             }
-            var children = ControllableHumanoidProcessor.CollectDirectHumanoidChildren(
-                animator,
-                descriptor,
-                parentIsRoot.boolValue,
-                (HumanBodyBones)parentBone.enumValueIndex);
+
+            var children = GetDirectHumanoidChildren(parentIsRoot.boolValue, (HumanBodyBones)parentBone.enumValueIndex);
+            var slots = entry.FindPropertyRelative(nameof(ControllableHumanoid.BoneLinkEntry.childParents));
 
             if (children == null)
             {
-                EditorGUILayout.HelpBox("Humanoid Animator が見つからないため、子ボーンを列挙できません。", MessageType.Info);
+                DrawHelpBoxWithDefaultFont("Humanoid Animator が見つからないため、子ボーンを列挙できません。", MessageType.Info);
             }
             else
             {
-                var sharedKeepLocal = entry.FindPropertyRelative(nameof(ControllableHumanoid.BoneLinkEntry.keepLocal));
-                SyncChildParentSlots(entry, children, sharedKeepLocal == null || sharedKeepLocal.boolValue);
                 if (children.Count == 0)
-                    EditorGUILayout.HelpBox("この親のヒューマノイド子はありません。", MessageType.Info);
+                    DrawHelpBoxWithDefaultFont("この親のヒューマノイド子はありません。", MessageType.Info);
+
+                if (slots != null && !SlotsMatch(slots, children))
+                {
+                    DrawHelpBoxWithDefaultFont("子ボーンの一覧が現在のアバターと一致していません。", MessageType.Warning);
+                    if (GUILayout.Button("子ボーン一覧を更新"))
+                        SyncChildParentSlots(entry, parentIsRoot, parentBone);
+                }
             }
 
-            var slots = entry.FindPropertyRelative(nameof(ControllableHumanoid.BoneLinkEntry.childParents));
             if (slots == null)
                 return;
 
@@ -785,28 +928,45 @@ namespace Samirin33.NDMF.Components.Editor
             }
         }
 
+        private static bool SlotsMatch(SerializedProperty slots, List<HumanBodyBones> bones)
+        {
+            if (slots.arraySize != bones.Count)
+                return false;
+
+            for (var i = 0; i < bones.Count; i++)
+            {
+                var boneProp = slots.GetArrayElementAtIndex(i)
+                    .FindPropertyRelative(nameof(ControllableHumanoid.BoneLinkEntry.ChildParentEntry.bone));
+                if (boneProp.enumValueIndex != (int)bones[i])
+                    return false;
+            }
+
+            return true;
+        }
+
+        private void SyncChildParentSlots(
+            SerializedProperty entry,
+            SerializedProperty parentIsRoot,
+            SerializedProperty parentBone)
+        {
+            if (serializedObject.targetObjects.Length > 1)
+                return;
+
+            var children = GetDirectHumanoidChildren(parentIsRoot.boolValue, (HumanBodyBones)parentBone.enumValueIndex);
+            if (children == null)
+                return;
+
+            var sharedKeepLocal = entry.FindPropertyRelative(nameof(ControllableHumanoid.BoneLinkEntry.keepLocal));
+            SyncChildParentSlots(entry, children, sharedKeepLocal == null || sharedKeepLocal.boolValue);
+        }
+
         private static void SyncChildParentSlots(SerializedProperty entry, List<HumanBodyBones> bones, bool defaultKeepLocal)
         {
             var slots = entry.FindPropertyRelative(nameof(ControllableHumanoid.BoneLinkEntry.childParents));
             if (slots == null || bones == null)
                 return;
 
-            var same = slots.arraySize == bones.Count;
-            if (same)
-            {
-                for (var i = 0; i < bones.Count; i++)
-                {
-                    var boneProp = slots.GetArrayElementAtIndex(i)
-                        .FindPropertyRelative(nameof(ControllableHumanoid.BoneLinkEntry.ChildParentEntry.bone));
-                    if (boneProp.enumValueIndex != (int)bones[i])
-                    {
-                        same = false;
-                        break;
-                    }
-                }
-            }
-
-            if (same)
+            if (SlotsMatch(slots, bones))
                 return;
 
             var savedParents = new Dictionary<int, UnityEngine.Object>();
@@ -838,36 +998,37 @@ namespace Samirin33.NDMF.Components.Editor
             SerializedProperty parentBone,
             bool includeRoot)
         {
+            EnsureHumanoidBoneOptions(parentBone);
+
             var options = new List<string>();
             var values = new List<int>();
             if (includeRoot)
             {
-                options.Add("Root");
+                options.Add("ルート");
                 values.Add(-1);
             }
 
-            var names = parentBone.enumDisplayNames;
-            for (var i = 0; i < names.Length; i++)
-            {
-                if (!ControllableHumanoid.BoneLinkEntry.IsBone((HumanBodyBones)i))
-                    continue;
-                options.Add(names[i]);
-                values.Add(i);
-            }
+            options.AddRange(_humanoidBoneOptions);
+            values.AddRange(_humanoidBoneValues);
 
             var current = parentIsRoot.boolValue ? -1 : parentBone.enumValueIndex;
-            var selected = 0;
-            for (var i = 0; i < values.Count; i++)
+            var selected = values.IndexOf(current);
+            if (selected < 0)
             {
-                if (values[i] == current)
-                {
-                    selected = i;
-                    break;
-                }
+                options.Insert(0, BoneLabel(parentBone));
+                values.Insert(0, current);
+                selected = 0;
             }
 
+            EditorGUI.showMixedValue = parentIsRoot.hasMultipleDifferentValues
+                || (!parentIsRoot.boolValue && parentBone.hasMultipleDifferentValues);
+            EditorGUI.BeginChangeCheck();
             var next = EditorGUILayout.Popup(label, selected, options.ToArray());
-            var changed = values[next] != current;
+            var changed = EditorGUI.EndChangeCheck();
+            EditorGUI.showMixedValue = false;
+            if (!changed)
+                return false;
+
             if (values[next] < 0)
                 parentIsRoot.boolValue = true;
             else
@@ -876,7 +1037,7 @@ namespace Samirin33.NDMF.Components.Editor
                 parentBone.enumValueIndex = values[next];
             }
 
-            return changed;
+            return true;
         }
 
         private static string BoneLabel(SerializedProperty boneProperty)
@@ -893,10 +1054,10 @@ namespace Samirin33.NDMF.Components.Editor
 
         private static void SetAllGroupFoldouts(bool open)
         {
-            SetFoldout(PrefsKeyPrefix + "Root", open);
-            foreach (var (label, _) in BoneGroups)
-                SetFoldout(PrefsKeyPrefix + label, open);
-            SetFoldout(PrefsKeyPrefix + "Other", open);
+            SetFoldout(PrefsKeyGroupPrefix + RootGroupKey, open);
+            foreach (var (key, _, _) in BoneGroups)
+                SetFoldout(PrefsKeyGroupPrefix + key, open);
+            SetFoldout(PrefsKeyGroupPrefix + OtherGroupKey, open);
         }
 
         private static bool GetFoldout(string key, bool defaultValue)

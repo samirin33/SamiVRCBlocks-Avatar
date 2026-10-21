@@ -16,6 +16,7 @@ namespace Samirin33.NDMF.Components.Editor
     {
         /// <summary>
         /// 指定レイヤー種別のコントローラを 1 つ取得する。カスタム未設定の場合は null。
+        /// 読み取りのみで、Descriptor は変更しない。
         /// </summary>
         public static AnimatorController GetController(
             GameObject avatarRootObject,
@@ -24,8 +25,6 @@ namespace Samirin33.NDMF.Components.Editor
             if (avatarRootObject == null) return null;
             if (!avatarRootObject.TryGetComponent<VRCAvatarDescriptor>(out var descriptor))
                 return null;
-
-            descriptor.customizeAnimationLayers = true;
 
             var rt = GetRuntimeController(descriptor, layerType);
             if (rt == null) return null;
@@ -52,6 +51,19 @@ namespace Samirin33.NDMF.Components.Editor
                 if (ac != null) set.Add(ac);
             }
             return set.ToList();
+        }
+
+        /// <summary>
+        /// Descriptor のレイヤーを書き換える側が呼ぶ。customizeAnimationLayers が false のままだと
+        /// SDK がレイヤーを既定へ戻すことがあるため、明示的に有効にする（NDMF のコミット処理と同じ扱い）。
+        /// </summary>
+        public static void EnsureCustomizeAnimationLayers(GameObject avatarRootObject)
+        {
+            if (avatarRootObject == null) return;
+            if (!avatarRootObject.TryGetComponent<VRCAvatarDescriptor>(out var descriptor))
+                return;
+
+            descriptor.customizeAnimationLayers = true;
         }
 
         /// <summary>

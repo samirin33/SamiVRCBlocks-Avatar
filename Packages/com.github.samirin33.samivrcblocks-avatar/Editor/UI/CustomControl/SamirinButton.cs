@@ -32,7 +32,7 @@ namespace Samirin.VRCUtility.Avatars
     public class SamirinButton : VisualElement
     {
         public new class UxmlFactory : UxmlFactory<SamirinButton, UxmlTraits> { }
-        private const string ButtonBgFolder = "Packages/com.github.samirin33.samirin-vrc-utility.avatars/Editor/Image/ButtonBG";
+        private const string ButtonBgFolder = "Packages/com.github.samirin33.samivrcblocks-avatar/Editor/Image/ButtonBG";
 
         public new class UxmlTraits : VisualElement.UxmlTraits
         {
@@ -60,7 +60,8 @@ namespace Samirin.VRCUtility.Avatars
             }
         }
 
-        private const string UxmlPath = "Packages/com.github.samirin33.samirin-vrc-utility.avatars/Editor/UI/SamirinButton.uxml";
+        // パッケージ名やフォルダ構成が変わっても読み込めるよう GUID で参照する（SButton.uxml）
+        private const string UxmlGuid = "7e17bf99ee698da448cb373a833f7c1e";
 
         /// <summary>ボタン文言を表示する Label（name="ButtonText"）。親の最小サイズに合わせてフォントサイズが自動調整されます。</summary>
         public Label ButtonText => this.Q<Label>("ButtonText");
@@ -113,7 +114,7 @@ namespace Samirin.VRCUtility.Avatars
 
         public SamirinButton()
         {
-            var tree = AssetDatabase.LoadAssetAtPath<VisualTreeAsset>(UxmlPath);
+            var tree = AssetDatabase.LoadAssetAtPath<VisualTreeAsset>(AssetDatabase.GUIDToAssetPath(UxmlGuid));
             if (tree != null)
                 tree.CloneTree(this);
 

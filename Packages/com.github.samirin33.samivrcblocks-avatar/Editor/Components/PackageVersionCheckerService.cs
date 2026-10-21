@@ -22,10 +22,29 @@ namespace Samirin33.NDMF.Components.Editor
         private const string VpmManifestRelativePath = "Packages/vpm-manifest.json";
 
         private static readonly HashSet<int> PendingInstanceIds = new HashSet<int>();
-        private static readonly Dictionary<int, double> LastScheduledTimeByInstanceId = new Dictionary<int, double>();
-        private const double CheckDebounceSeconds = 2.0;
+        // 入力途中の値（例: "3" → "3.10.0"）で警告しないよう、最後の変更から一定時間後にまとめて照合する。
+        private const double CheckDebounceSeconds = 1.5;
+        private static double _flushDueTime;
         private static bool _scheduled;
         private static bool _pendingForceDialog;
+
+        [InitializeOnLoadMethod]
+        private static void RegisterValidateHook()
+        {
+            PackageVersionChecker.EditorValidateHook = OnCheckerValidated;
+        }
+
+        private static void OnCheckerValidated(PackageVersionChecker checker)
+        {
+            if (checker == null)
+                return;
+
+            // インスペクタで要件を編集中の作者には、インスペクタ上の状態表示で十分なので自動ダイアログを出さない。
+            if (Selection.Contains(checker.gameObject))
+                return;
+
+            ScheduleCheck(checker, forceDialog: false);
+        }
 
         public sealed class Mismatch
         {
@@ -36,54 +55,39 @@ namespace Samirin33.NDMF.Components.Editor
             public bool IsMissing;
         }
 
+        /// <summary>
+        /// 照合を予約する。ダイアログは OnValidate / ObjectChangeEvents の外（EditorApplication.update）で、
+        /// 予約されたすべての Checker の不足分をまとめて 1 回だけ出す。
+        /// forceDialog=true はセッション内の抑制を無視する（手動操作向け）。
+        /// </summary>
         public static void ScheduleCheck(PackageVersionChecker checker, bool forceDialog = false)
         {
             if (checker == null)
                 return;
 
-            var id = checker.GetInstanceID();
-            var now = EditorApplication.timeSinceStartup;
-            if (LastScheduledTimeByInstanceId.TryGetValue(id, out var last)
-                && now - last < CheckDebounceSeconds)
-            {
-                return;
-            }
-
-            LastScheduledTimeByInstanceId[id] = now;
-
-            // 手動チェックは即時実行（delayCall だとダイアログが出ない／失われることがある）
-            if (forceDialog && !EditorApplication.isCompiling && !EditorApplication.isUpdating)
-            {
-                CheckAndWarn(checker, forceDialog: true, showSatisfiedDialog: false);
-                return;
-            }
-
             if (forceDialog)
                 _pendingForceDialog = true;
 
-            PendingInstanceIds.Add(id);
+            PendingInstanceIds.Add(checker.GetInstanceID());
+            _flushDueTime = EditorApplication.timeSinceStartup + CheckDebounceSeconds;
             if (_scheduled)
                 return;
 
             _scheduled = true;
-            EditorApplication.delayCall += FlushWhenReady;
+            EditorApplication.update += FlushWhenReady;
         }
 
         /// <summary>
         /// 配置された GameObject 配下の PackageVersionChecker を照合する。
         /// </summary>
-        public static void CheckPlacedHierarchy(GameObject root, bool forceDialog = true)
+        public static void CheckPlacedHierarchy(GameObject root, bool forceDialog = false)
         {
             if (root == null)
                 return;
 
             var checkers = root.GetComponentsInChildren<PackageVersionChecker>(true);
             if (checkers == null || checkers.Length == 0)
-            {
-                Debug.Log(
-                    $"[PackageVersionChecker] 配置オブジェクト「{root.name}」配下に PackageVersionChecker がありません。");
                 return;
-            }
 
             foreach (var checker in checkers)
                 ScheduleCheck(checker, forceDialog);
@@ -91,30 +95,43 @@ namespace Samirin33.NDMF.Components.Editor
 
         private static void FlushWhenReady()
         {
-            if (EditorApplication.isCompiling || EditorApplication.isUpdating)
-            {
-                EditorApplication.delayCall += FlushWhenReady;
+            if (EditorApplication.timeSinceStartup < _flushDueTime
+                || EditorApplication.isCompiling
+                || EditorApplication.isUpdating)
                 return;
-            }
+
+            EditorApplication.update -= FlushWhenReady;
+            _scheduled = false;
 
             var forceDialog = _pendingForceDialog;
             _pendingForceDialog = false;
-            _scheduled = false;
-            ScheduleFlush(forceDialog);
-        }
 
-        private static void ScheduleFlush(bool forceDialog)
-        {
             var ids = PendingInstanceIds.ToArray();
             PendingInstanceIds.Clear();
 
+            if (EditorApplication.isPlayingOrWillChangePlaymode)
+                return;
+
+            var merged = new Dictionary<string, Mismatch>(StringComparer.Ordinal);
             foreach (var id in ids)
             {
                 var checker = EditorUtility.InstanceIDToObject(id) as PackageVersionChecker;
-                if (checker == null)
+                if (checker == null || !checker.gameObject.scene.IsValid())
                     continue;
-                CheckAndWarn(checker, forceDialog);
+
+                foreach (var m in CollectMismatches(checker))
+                {
+                    // 複数の Checker が同じパッケージを要求する場合は、最も高い要求バージョンに揃える。
+                    if (!merged.TryGetValue(m.PackageId, out var existing)
+                        || IsVersionLower(existing.RequiredVersion, m.RequiredVersion))
+                        merged[m.PackageId] = m;
+                }
             }
+
+            if (merged.Count == 0)
+                return;
+
+            WarnMismatches(merged.Values.ToList(), forceDialog);
         }
 
         public static List<Mismatch> CollectMismatches(PackageVersionChecker checker)
@@ -191,6 +208,12 @@ namespace Samirin33.NDMF.Components.Editor
                 return;
             }
 
+            WarnMismatches(mismatches, forceDialog);
+        }
+
+        private static void WarnMismatches(IReadOnlyList<Mismatch> mismatches, bool forceDialog)
+        {
+            // 同じ不足内容はセッション（ドメインリロードをまたいでエディタ終了まで）に 1 回だけ自動表示する。
             var warnKey = SessionWarnedPrefix + BuildMismatchKey(mismatches);
             if (!forceDialog && SessionState.GetBool(warnKey, false))
                 return;
@@ -226,120 +249,237 @@ namespace Samirin33.NDMF.Components.Editor
             return sb.ToString();
         }
 
+        /// <summary>
+        /// VRChat Package Resolver（vpm-core-lib）の UpdateVPMPackage / AddVPMPackage で要求バージョンを入れる。
+        /// vpm-manifest.json の locked を直接書き換えると、推移的な依存（例: MA が要求する NDMF の版、
+        /// SDK Avatars が要求する SDK Base の版）が古いまま残り壊れた構成になり得るため、
+        /// 依存解決できる VPM API が使えない・失敗した場合は VCC / ALCOM / vrc-get での手動更新を案内する。
+        /// </summary>
         public static bool TryAutoFix(IReadOnlyList<Mismatch> mismatches)
         {
             if (mismatches == null || mismatches.Count == 0)
                 return false;
 
-            var manifestPath = Path.GetFullPath(Path.Combine(Application.dataPath, "..", VpmManifestRelativePath));
-            if (!File.Exists(manifestPath))
+            if (!VpmApi.TryCreate(out var api, out var apiError))
             {
-                EditorUtility.DisplayDialog(
-                    "Package Version Checker",
-                    $"自動修正に失敗しました。\n{VpmManifestRelativePath} が見つかりません。\nVRChat Creator Companion / VPM でプロジェクトを管理しているか確認してください。",
-                    "閉じる");
+                ShowManualUpdateDialog(mismatches, apiError);
                 return false;
             }
 
-            string json;
+            var report = new StringBuilder();
+            var failed = new List<Mismatch>();
+            var anyInstalled = false;
             try
             {
-                json = File.ReadAllText(manifestPath, Encoding.UTF8);
-            }
-            catch (Exception e)
-            {
-                EditorUtility.DisplayDialog(
-                    "Package Version Checker",
-                    $"vpm-manifest.json の読み込みに失敗しました。\n{e.Message}",
-                    "閉じる");
-                return false;
-            }
-
-            var updated = false;
-            var report = new StringBuilder();
-            var syncedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            foreach (var m in mismatches)
-            {
-                if (TryUpsertVpmDependencyVersion(ref json, m.PackageId, m.RequiredVersion))
+                for (var i = 0; i < mismatches.Count; i++)
                 {
-                    updated = true;
-                    syncedIds.Add(m.PackageId);
-                    report.AppendLine($"・{m.DisplayName} → {m.RequiredVersion}");
-                }
-                else
-                {
-                    report.AppendLine($"・{m.DisplayName}: 更新できませんでした");
-                }
+                    var m = mismatches[i];
+                    EditorUtility.DisplayProgressBar(
+                        "Package Version Checker",
+                        $"{m.DisplayName} {m.RequiredVersion} を取得中...",
+                        (float)i / mismatches.Count);
 
-                // VRChat SDK は avatars / base を同バージョンに揃える
-                if (TryGetVrchatSdkPairId(m.PackageId, out var pairId) && !syncedIds.Contains(pairId))
-                {
-                    if (TryUpsertVpmDependencyVersion(ref json, pairId, m.RequiredVersion))
+                    if (api.TryInstall(m.PackageId, m.RequiredVersion, m.IsMissing, out var error))
                     {
-                        updated = true;
-                        syncedIds.Add(pairId);
-                        report.AppendLine($"・{pairId} → {m.RequiredVersion}（SDK 同期）");
+                        anyInstalled = true;
+                        report.AppendLine($"・{m.DisplayName} → {m.RequiredVersion}");
+                    }
+                    else
+                    {
+                        failed.Add(m);
+                        report.AppendLine($"・{m.DisplayName}: {error}");
                     }
                 }
             }
-
-            if (!updated)
+            finally
             {
-                EditorUtility.DisplayDialog(
-                    "Package Version Checker",
-                    "vpm-manifest.json を更新できませんでした。\n手動で依存バージョンを上げてください。\n\n" + report,
-                    "閉じる");
+                EditorUtility.ClearProgressBar();
+            }
+
+            // Unity Package Manager への反映（Client.Resolve + AssetDatabase.Refresh）はここで 1 回だけ行う。
+            if (anyInstalled)
+                api.ForceRefresh();
+
+            if (failed.Count > 0)
+            {
+                ShowManualUpdateDialog(failed, report.ToString());
                 return false;
             }
 
-            try
-            {
-                File.WriteAllText(manifestPath, json, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-            }
-            catch (Exception e)
-            {
-                EditorUtility.DisplayDialog(
-                    "Package Version Checker",
-                    $"vpm-manifest.json の書き込みに失敗しました。\n{e.Message}",
-                    "閉じる");
-                return false;
-            }
-
-            AssetDatabase.Refresh();
-
-            var resolved = TryInvokeVpmResolve();
-            // var resolveNote = resolved
-            //     ? "VPM Resolve を実行しました。パッケージのダウンロードが完了するまでお待ちください。"
-            //     : "vpm-manifest.json は更新しました。VRChat Package Resolver ウィンドウ、または Creator Companion から Resolve を実行してください。";
-
-            // EditorUtility.DisplayDialog(
-            //     "Package Version Checker",
-            //     "依存バージョンを更新しました。\n\n" + report + "\n" + resolveNote,
-            //     "閉じる");
-
-            Debug.Log("依存バージョンを更新しました。\n\n" + report);
-
-            Client.Resolve();
+            Debug.Log("[PackageVersionChecker] パッケージを更新しました。\n" + report);
             return true;
         }
 
-        private static bool TryGetVrchatSdkPairId(string packageId, out string pairId)
+        private static void ShowManualUpdateDialog(IReadOnlyList<Mismatch> mismatches, string detail)
         {
-            if (string.Equals(packageId, "com.vrchat.avatars", StringComparison.OrdinalIgnoreCase))
+            var sb = new StringBuilder();
+            sb.AppendLine("自動修正できませんでした。");
+            sb.AppendLine("VRChat Creator Companion / ALCOM の「プロジェクトの管理」から、次のパッケージを更新してください。");
+            sb.AppendLine();
+            foreach (var m in mismatches)
+                sb.AppendLine($"・{m.DisplayName} ({m.PackageId}) {m.RequiredVersion} 以上");
+            sb.AppendLine();
+            sb.AppendLine("vrc-get を使う場合:");
+            foreach (var m in mismatches)
+                sb.AppendLine($"  vrc-get install {m.PackageId} {m.RequiredVersion}");
+            if (!string.IsNullOrEmpty(detail))
             {
-                pairId = "com.vrchat.base";
+                sb.AppendLine();
+                sb.AppendLine("詳細:");
+                sb.Append(detail);
+            }
+
+            EditorUtility.DisplayDialog("Package Version Checker", sb.ToString(), "閉じる");
+        }
+
+        /// <summary>
+        /// com.vrchat.core.vpm-resolver / vpm-core-lib への反射アクセス。
+        /// asmdef 参照を足すと VPM 非管理プロジェクトでコンパイルできなくなるため反射で呼ぶ。
+        /// </summary>
+        private sealed class VpmApi
+        {
+            private object _project;
+            private MethodInfo _getPackage;
+            private MethodInfo _update;
+            private MethodInfo _add;
+            private MethodInfo _forceRefresh;
+
+            public static bool TryCreate(out VpmApi api, out string error)
+            {
+                api = null;
+                error = null;
+
+                var reposType = FindType("VRC.PackageManagement.Core.Repos");
+                var projectType = FindType("VRC.PackageManagement.Core.Types.UnityProject");
+                var resolverType = FindType("VRC.PackageManagement.Resolver.Resolver");
+                if (reposType == null || projectType == null || resolverType == null)
+                {
+                    error = "VRChat Package Resolver（com.vrchat.core.vpm-resolver）が見つかりません。";
+                    return false;
+                }
+
+                var getPackage = reposType.GetMethod(
+                    "GetPackageWithVersionMatch",
+                    BindingFlags.Public | BindingFlags.Static,
+                    null,
+                    new[] { typeof(string), typeof(string) },
+                    null);
+                var instanceMethods = projectType.GetMethods(BindingFlags.Public | BindingFlags.Instance);
+                var update = instanceMethods.FirstOrDefault(m =>
+                    m.Name == "UpdateVPMPackage" && m.GetParameters().Length == 1);
+                var add = instanceMethods.FirstOrDefault(m =>
+                {
+                    if (m.Name != "AddVPMPackage")
+                        return false;
+                    var ps = m.GetParameters();
+                    return ps.Length >= 1
+                           && ps[0].ParameterType != typeof(string)
+                           && ps.Skip(1).All(p => p.IsOptional);
+                });
+                var projectDirProperty = resolverType.GetProperty("ProjectDir", BindingFlags.Public | BindingFlags.Static);
+                var forceRefresh = resolverType.GetMethod("ForceRefresh", BindingFlags.Public | BindingFlags.Static, null, Type.EmptyTypes, null);
+
+                if (getPackage == null || update == null || add == null || projectDirProperty == null || forceRefresh == null)
+                {
+                    error = "VRChat Package Resolver の API が想定と異なります（VPM の更新で変わった可能性があります）。";
+                    return false;
+                }
+
+                object project;
+                try
+                {
+                    var projectDir = projectDirProperty.GetValue(null) as string;
+                    if (string.IsNullOrEmpty(projectDir))
+                    {
+                        error = "VPM プロジェクトのフォルダを取得できませんでした。";
+                        return false;
+                    }
+
+                    project = Activator.CreateInstance(projectType, projectDir);
+                }
+                catch (Exception e)
+                {
+                    error = (e.InnerException ?? e).Message;
+                    return false;
+                }
+
+                api = new VpmApi
+                {
+                    _project = project,
+                    _getPackage = getPackage,
+                    _update = update,
+                    _add = add,
+                    _forceRefresh = forceRefresh
+                };
                 return true;
             }
 
-            if (string.Equals(packageId, "com.vrchat.base", StringComparison.OrdinalIgnoreCase))
+            public bool TryInstall(string packageId, string version, bool isMissing, out string error)
             {
-                pairId = "com.vrchat.avatars";
-                return true;
+                error = null;
+                try
+                {
+                    var package = _getPackage.Invoke(null, new object[] { packageId, version });
+                    if (package == null)
+                    {
+                        error = $"VPM リポジトリに {version} が見つかりません（リポジトリ未登録の可能性があります）";
+                        return false;
+                    }
+
+                    if (!isMissing)
+                    {
+                        _update.Invoke(_project, new[] { package });
+                        return true;
+                    }
+
+                    var ps = _add.GetParameters();
+                    var args = new object[ps.Length];
+                    args[0] = package;
+                    for (var i = 1; i < ps.Length; i++)
+                    {
+                        args[i] = ps[i].HasDefaultValue
+                            ? ps[i].DefaultValue
+                            : ps[i].ParameterType.IsValueType ? Activator.CreateInstance(ps[i].ParameterType) : null;
+                    }
+
+                    if (_add.Invoke(_project, args) is bool added && !added)
+                    {
+                        error = "追加に失敗しました";
+                        return false;
+                    }
+
+                    return true;
+                }
+                catch (Exception e)
+                {
+                    error = (e is TargetInvocationException tie && tie.InnerException != null ? tie.InnerException : e).Message;
+                    return false;
+                }
             }
 
-            pairId = null;
-            return false;
+            public void ForceRefresh()
+            {
+                try
+                {
+                    _forceRefresh.Invoke(null, null);
+                }
+                catch (Exception e)
+                {
+                    Debug.LogWarning($"[PackageVersionChecker] パッケージの再読み込みに失敗しました: {(e.InnerException ?? e).Message}");
+                }
+            }
+
+            private static Type FindType(string fullName)
+            {
+                foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    var type = assembly.GetType(fullName, false);
+                    if (type != null)
+                        return type;
+                }
+
+                return null;
+            }
         }
 
         public sealed class PackageChoice
@@ -687,102 +827,6 @@ namespace Samirin33.NDMF.Components.Editor
             return packageMatch.Success ? packageMatch.Groups["ver"].Value : null;
         }
 
-        /// <summary>
-        /// vpm-manifest.json の dependencies / locked 双方にある package の version を upsert する。
-        /// VPM Resolve は locked を優先するため、dependencies だけの更新ではインストールが変わらない。
-        /// </summary>
-        internal static bool TryUpsertVpmDependencyVersion(ref string json, string packageId, string version)
-        {
-            if (string.IsNullOrEmpty(json) || string.IsNullOrEmpty(packageId) || string.IsNullOrEmpty(version))
-                return false;
-
-            var changed = false;
-
-            // "package.id": { "version": "..." } 形式（dependencies / locked の両方）を更新。
-            // nested dependencies の "id": ">=x" 文字列制約にはマッチしない。
-            // MatchEvaluator 必須（"$1" + "3.x" だと $13 グループ参照になる）
-            var entryRegex = new Regex(
-                $"(\"{Regex.Escape(packageId)}\"\\s*:\\s*\\{{\\s*\"version\"\\s*:\\s*\")([^\"]+)(\")",
-                RegexOptions.CultureInvariant);
-
-            if (entryRegex.IsMatch(json))
-            {
-                json = entryRegex.Replace(json, m =>
-                {
-                    if (m.Groups[2].Value == version)
-                        return m.Value;
-                    changed = true;
-                    return m.Groups[1].Value + version + m.Groups[3].Value;
-                });
-            }
-
-            // dependencies に無ければ追加（Resolve の要求元）
-            if (!IsPackageInDependenciesSection(json, packageId))
-            {
-                if (TryAddPackageToDependencies(ref json, packageId, version))
-                    changed = true;
-            }
-            else if (!changed)
-            {
-                // dependencies は既に要求値だが、locked / 実体が古い場合でも Resolve を走らせる
-                changed = true;
-            }
-
-            return changed;
-        }
-
-        private static bool IsPackageInDependenciesSection(string json, string packageId)
-        {
-            if (!TryGetDependenciesBody(json, out var body, out _, out _))
-                return false;
-
-            return Regex.IsMatch(
-                body,
-                $"\"{Regex.Escape(packageId)}\"\\s*:\\s*\\{{",
-                RegexOptions.CultureInvariant);
-        }
-
-        private static bool TryAddPackageToDependencies(ref string json, string packageId, string version)
-        {
-            if (!TryGetDependenciesBody(json, out var body, out var bodyIndex, out var bodyLength))
-                return false;
-
-            var hasEntries = body.IndexOf('"') >= 0;
-            var comma = hasEntries ? "," : "";
-            var newBody = $"\n    \"{packageId}\": {{\n      \"version\": \"{version}\"\n    }}{comma}{body}";
-            json = json.Substring(0, bodyIndex) + newBody + json.Substring(bodyIndex + bodyLength);
-            return true;
-        }
-
-        private static bool TryGetDependenciesBody(string json, out string body, out int bodyIndex, out int bodyLength)
-        {
-            body = null;
-            bodyIndex = 0;
-            bodyLength = 0;
-
-            // dependencies 〜 locked 手前のブロックだけを対象にする
-            var depsSection = Regex.Match(
-                json,
-                "\"dependencies\"\\s*:\\s*\\{(?<body>[\\s\\S]*?)\\n(?<indent>\\s*)\\}\\s*,\\s*\\n\\s*\"locked\"",
-                RegexOptions.CultureInvariant);
-
-            if (!depsSection.Success)
-            {
-                depsSection = Regex.Match(
-                    json,
-                    "\"dependencies\"\\s*:\\s*\\{(?<body>[\\s\\S]*?)\\n(?<indent>\\s*)\\}",
-                    RegexOptions.CultureInvariant);
-            }
-
-            if (!depsSection.Success)
-                return false;
-
-            body = depsSection.Groups["body"].Value;
-            bodyIndex = depsSection.Groups["body"].Index;
-            bodyLength = depsSection.Groups["body"].Length;
-            return true;
-        }
-
         private static string ReadJsonStringField(string json, string fieldName)
         {
             var match = Regex.Match(
@@ -790,40 +834,6 @@ namespace Samirin33.NDMF.Components.Editor
                 $"\"{Regex.Escape(fieldName)}\"\\s*:\\s*\"(?<v>[^\"]+)\"",
                 RegexOptions.CultureInvariant);
             return match.Success ? match.Groups["v"].Value : null;
-        }
-
-        private static bool TryInvokeVpmResolve()
-        {
-            try
-            {
-                var resolverType = Type.GetType("VRC.PackageManagement.Resolver.Resolver, com.vrchat.core.vpm-resolver.Editor");
-                if (resolverType == null)
-                {
-                    foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
-                    {
-                        if (assembly.GetName().Name != "com.vrchat.core.vpm-resolver.Editor")
-                            continue;
-                        resolverType = assembly.GetType("VRC.PackageManagement.Resolver.Resolver");
-                        if (resolverType != null)
-                            break;
-                    }
-                }
-
-                if (resolverType == null)
-                    return false;
-
-                var method = resolverType.GetMethod("ResolveManifest", BindingFlags.Public | BindingFlags.Static);
-                if (method == null)
-                    return false;
-
-                method.Invoke(null, null);
-                return true;
-            }
-            catch (Exception e)
-            {
-                Debug.LogWarning($"[PackageVersionChecker] VPM Resolve の呼び出しに失敗しました: {e.Message}");
-                return false;
-            }
         }
     }
 }

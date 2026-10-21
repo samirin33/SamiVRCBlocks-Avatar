@@ -20,6 +20,9 @@ namespace Samirin33.Editor
         private static RectOffset _backgroundPadding;
         private static RectOffset BackgroundPadding => _backgroundPadding ??= new RectOffset(12, 12, 12, 12);
 
+        private static RectOffset _backgroundBorder;
+        private static RectOffset BackgroundBorder => _backgroundBorder ??= new RectOffset(CornerRadius, CornerRadius, CornerRadius, CornerRadius);
+
         private static readonly Color OutlineColor = new Color(0.3f, 0.12f, 0.3f, 0.3f);
         private const int CornerRadius = 8;
         private const int OutlineWidth = 4;
@@ -33,8 +36,6 @@ namespace Samirin33.Editor
         private static Texture2D _backgroundFinalTexture;
         private static Color _cachedBackgroundColor;
         private static Material _backgroundMaterial;
-
-        private static readonly Dictionary<int, float> _hoverScaleValues = new Dictionary<int, float>();
 
         private static Font EditorFont
         {
@@ -229,7 +230,7 @@ namespace Samirin33.Editor
                     _blueBackgroundStyle = new GUIStyle();
                 _blueBackgroundStyle.margin = BackgroundMargin;
                 _blueBackgroundStyle.padding = BackgroundPadding;
-                _blueBackgroundStyle.border = new RectOffset(CornerRadius, CornerRadius, CornerRadius, CornerRadius);
+                _blueBackgroundStyle.border = BackgroundBorder;
                 var tex = GetFinalBackgroundTexture();
                 if (tex != null)
                     _blueBackgroundStyle.normal.background = tex;
@@ -297,12 +298,13 @@ namespace Samirin33.Editor
 
         private static void DrawWithBlueBackgroundContent(Action drawContent)
         {
-            Font previousFont = null;
+            var previousFont = GUI.skin.font;
+            var fontChanged = false;
             if (SamirinEditorPreferences.UseCustomFont && EditorFont != null)
             {
-                previousFont = GUI.skin.font;
                 if (_defaultFont == null) _defaultFont = previousFont;
                 GUI.skin.font = EditorFont;
+                fontChanged = true;
             }
             try
             {
@@ -310,10 +312,9 @@ namespace Samirin33.Editor
             }
             finally
             {
-                if (previousFont != null)
-                {
+                // 元のフォントが null（スキン既定）の場合も戻さないと、カスタムフォントが他のインスペクターへ漏れる
+                if (fontChanged)
                     GUI.skin.font = previousFont;
-                }
             }
             EditorGUILayout.EndVertical();
         }
@@ -383,41 +384,6 @@ namespace Samirin33.Editor
             var current = Event.current;
             if (current == null) return false;
             return rect.Contains(current.mousePosition);
-        }
-
-        public static void DrawHoverScale(Rect rect, Action drawContent, float baseScale = 1f, float hoverScale = 1.05f, float animationSpeed = 10f)
-        {
-            if (drawContent == null) return;
-            if (!SamirinEditorPreferences.EnableRealtimeAnimation)
-            {
-                drawContent();
-                return;
-            }
-
-            var id = GUIUtility.GetControlID(FocusType.Passive, rect);
-            var isHover = IsMouseHover(rect);
-
-            if (!_hoverScaleValues.TryGetValue(id, out var currentScale))
-            {
-                currentScale = baseScale;
-            }
-
-            var targetScale = isHover ? hoverScale : baseScale;
-            var smooth = 1f - Mathf.Exp(-animationSpeed * 0.02f);
-            currentScale = Mathf.Lerp(currentScale, targetScale, smooth);
-            _hoverScaleValues[id] = currentScale;
-
-            var pivot = rect.center;
-            var previousMatrix = GUI.matrix;
-            GUIUtility.ScaleAroundPivot(new Vector2(currentScale, currentScale), pivot);
-            try
-            {
-                drawContent();
-            }
-            finally
-            {
-                GUI.matrix = previousMatrix;
-            }
         }
     }
 }

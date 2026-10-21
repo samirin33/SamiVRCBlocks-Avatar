@@ -45,15 +45,60 @@ namespace Samirin33.NDMF.Module
             DestroyImmediate(this);
         }
 
+        /// <summary>
+        /// アバター直下に同じプレファブが置かれているか。
+        /// プレファブ接続が残っていればその元アセットで判定する（Apply on Play など）。
+        /// アップロードや Manual Bake ではアバターが Instantiate で複製され接続が切れるため、
+        /// 名前の完全一致か Unity の複製名「名前 (n)」だけを同じものとみなす。
+        /// </summary>
         private static bool ContainsParameterPrefabInstance(GameObject avatarObject, GameObject prefab)
         {
             var prefabName = prefab.name;
             foreach (Transform child in avatarObject.transform)
             {
-                if (child.name == prefabName || child.name.StartsWith(prefabName + " "))
+#if UNITY_EDITOR
+                var source = UnityEditor.PrefabUtility.GetCorrespondingObjectFromSource(child.gameObject);
+                if (source != null)
+                {
+                    // Variant を経由していても、元のどこかで同じプレファブなら配置済み。
+                    var matched = false;
+                    for (var s = source; s != null; s = UnityEditor.PrefabUtility.GetCorrespondingObjectFromSource(s))
+                    {
+                        if (s == prefab)
+                        {
+                            matched = true;
+                            break;
+                        }
+                    }
+                    if (matched)
+                        return true;
+                    continue;
+                }
+#endif
+                if (IsSameOrDuplicateName(child.name, prefabName))
                     return true;
             }
             return false;
+        }
+
+        private static bool IsSameOrDuplicateName(string name, string prefabName)
+        {
+            if (name == prefabName)
+                return true;
+
+            var prefix = prefabName + " (";
+            if (!name.StartsWith(prefix, System.StringComparison.Ordinal) || !name.EndsWith(")", System.StringComparison.Ordinal))
+                return false;
+
+            var digits = name.Length - prefix.Length - 1;
+            if (digits <= 0)
+                return false;
+            for (var i = prefix.Length; i < name.Length - 1; i++)
+            {
+                if (!char.IsDigit(name[i]))
+                    return false;
+            }
+            return true;
         }
     }
 }

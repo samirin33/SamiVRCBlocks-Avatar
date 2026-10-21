@@ -26,7 +26,7 @@ namespace Samirin33.NDMF.Components.Editor
             {
                 serializedObject.Update();
 
-                EditorGUILayout.HelpBox(
+                DrawHelpBoxWithDefaultFont(
                     "ビルド時（Resolving / MA 前）に、VRCAvatarDescriptor の指定コライダーを\n" +
                     "Target Transform（未指定なら自身）へ付け替えます。\n" +
                     "Offset Transform を指定すると、元のローカル位置・回転をそこに退避します。",

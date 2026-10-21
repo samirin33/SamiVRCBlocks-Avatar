@@ -12,11 +12,27 @@ namespace Samirin33.NDMF.Components.Editor
     public class PackageVersionCheckerEditor : SamirinMABaseEditor
     {
         private SerializedProperty _requirements;
-        private readonly Dictionary<int, bool> _foldouts = new Dictionary<int, bool>();
+
+        // GetInstalledVersion は Package Manager 照会とファイル読み込みを伴うため、毎フレーム呼ばない。
+        private readonly Dictionary<string, string> _installedVersionCache = new Dictionary<string, string>(StringComparer.Ordinal);
 
         private void OnEnable()
         {
             _requirements = serializedObject.FindProperty(nameof(PackageVersionChecker.requirements));
+            _installedVersionCache.Clear();
+        }
+
+        private string GetInstalledVersionCached(string packageId)
+        {
+            if (string.IsNullOrEmpty(packageId))
+                return null;
+            if (!_installedVersionCache.TryGetValue(packageId, out var version))
+            {
+                version = PackageVersionCheckerService.GetInstalledVersion(packageId);
+                _installedVersionCache[packageId] = version;
+            }
+
+            return version;
         }
 
         public override void OnInspectorGUI()
@@ -30,10 +46,13 @@ namespace Samirin33.NDMF.Components.Editor
 
                 EditorGUILayout.Space(8);
                 if (GUILayout.Button("今すぐチェック", GUILayout.Height(24)))
+                {
+                    _installedVersionCache.Clear();
                     PackageVersionCheckerService.CheckAndWarn(
                         (PackageVersionChecker)target,
                         forceDialog: true,
                         showSatisfiedDialog: true);
+                }
 
                 serializedObject.ApplyModifiedProperties();
             });
@@ -52,9 +71,7 @@ namespace Samirin33.NDMF.Components.Editor
                 var displayNameProp = element.FindPropertyRelative(nameof(PackageVersionChecker.Requirement.displayName));
 
                 var packageId = packageIdProp.stringValue;
-                var installed = string.IsNullOrEmpty(packageId)
-                    ? null
-                    : PackageVersionCheckerService.GetInstalledVersion(packageId);
+                var installed = GetInstalledVersionCached(packageId);
                 var title = string.IsNullOrEmpty(displayNameProp.stringValue)
                     ? (string.IsNullOrEmpty(packageId) ? $"要件 {i + 1}" : packageId)
                     : displayNameProp.stringValue;
@@ -73,9 +90,8 @@ namespace Samirin33.NDMF.Components.Editor
                 EditorGUILayout.BeginVertical(EditorStyles.helpBox);
 
                 EditorGUILayout.BeginHorizontal();
-                if (!_foldouts.TryGetValue(i, out var open))
-                    open = true;
-                _foldouts[i] = EditorGUILayout.Foldout(open, $"{title}  {status}", true);
+                // 開閉状態は要素自身の isExpanded に持たせ、並べ替え・削除で別の要件へずれないようにする。
+                element.isExpanded = EditorGUILayout.Foldout(element.isExpanded, $"{title}  {status}", true);
 
                 GUILayout.FlexibleSpace();
                 using (new EditorGUI.DisabledScope(i <= 0))
@@ -107,7 +123,7 @@ namespace Samirin33.NDMF.Components.Editor
 
                 EditorGUILayout.EndHorizontal();
 
-                if (_foldouts.TryGetValue(i, out var isOpen) && isOpen)
+                if (element.isExpanded)
                 {
                     DrawPackageIdField(packageIdProp, displayNameProp);
                     DrawMinVersionField(packageIdProp.stringValue, minVersionProp, installed);
@@ -265,7 +281,7 @@ namespace Samirin33.NDMF.Components.Editor
                 var minProp = el.FindPropertyRelative(nameof(PackageVersionChecker.Requirement.minVersion));
                 if (string.IsNullOrEmpty(minProp.stringValue))
                 {
-                    var installed = PackageVersionCheckerService.GetInstalledVersion(packageId);
+                    var installed = GetInstalledVersionCached(packageId);
                     if (!string.IsNullOrEmpty(installed))
                         minProp.stringValue = installed;
                 }
@@ -287,10 +303,10 @@ namespace Samirin33.NDMF.Components.Editor
             element.FindPropertyRelative(nameof(PackageVersionChecker.Requirement.displayName)).stringValue = displayName ?? "";
 
             if (string.IsNullOrEmpty(minVersion) && !string.IsNullOrEmpty(packageId))
-                minVersion = PackageVersionCheckerService.GetInstalledVersion(packageId);
+                minVersion = GetInstalledVersionCached(packageId);
 
             element.FindPropertyRelative(nameof(PackageVersionChecker.Requirement.minVersion)).stringValue = minVersion ?? "";
-            _foldouts[index] = true;
+            element.isExpanded = true;
             serializedObject.ApplyModifiedProperties();
         }
     }

@@ -161,12 +161,20 @@ namespace Samirin33.NDMF.Components
         }
 
 #if UNITY_EDITOR
+        [NonSerialized]
+        private Animator _cachedAnimator;
+
         private void LateUpdate()
         {
             if (Application.isPlaying)
                 return;
 
             ApplyLink(null);
+        }
+
+        private void OnTransformParentChanged()
+        {
+            _cachedAnimator = null;
         }
 #endif
 
@@ -296,11 +304,13 @@ namespace Samirin33.NDMF.Components
 
             if (positionSpace == TransformSpace.World)
             {
-                var pos = TransformMath.GetWorldPosition(t);
+                var current = TransformMath.GetWorldPosition(t);
+                var pos = current;
                 if (positionX) pos.x = desired.x;
                 if (positionY) pos.y = desired.y;
                 if (positionZ) pos.z = desired.z;
-                TransformMath.SetWorldPosition(t, pos);
+                if (pos != current)
+                    TransformMath.SetWorldPosition(t, pos);
             }
             else
             {
@@ -308,7 +318,8 @@ namespace Samirin33.NDMF.Components
                 if (positionX) pos.x = desired.x;
                 if (positionY) pos.y = desired.y;
                 if (positionZ) pos.z = desired.z;
-                t.localPosition = pos;
+                if (pos != t.localPosition)
+                    t.localPosition = pos;
             }
         }
 
@@ -321,11 +332,14 @@ namespace Samirin33.NDMF.Components
 
             if (rotationSpace == TransformSpace.World)
             {
-                var rot = TransformMath.GetWorldRotation(t).eulerAngles;
+                var current = TransformMath.GetWorldRotation(t);
+                var rot = current.eulerAngles;
                 if (rotationX) rot.x = desired.x;
                 if (rotationY) rot.y = desired.y;
                 if (rotationZ) rot.z = desired.z;
-                TransformMath.SetWorldRotation(t, Quaternion.Euler(rot));
+                var next = Quaternion.Euler(rot);
+                if (next != current)
+                    TransformMath.SetWorldRotation(t, next);
             }
             else
             {
@@ -333,7 +347,9 @@ namespace Samirin33.NDMF.Components
                 if (rotationX) rot.x = desired.x;
                 if (rotationY) rot.y = desired.y;
                 if (rotationZ) rot.z = desired.z;
-                t.localEulerAngles = rot;
+                var next = Quaternion.Euler(rot);
+                if (next != t.localRotation)
+                    t.localRotation = next;
             }
         }
 
@@ -347,18 +363,21 @@ namespace Samirin33.NDMF.Components
             if (scaleSpace == TransformSpace.World)
             {
                 var current = TransformMath.GetWorldScale(t);
-                if (scaleX) current.x = desired.x;
-                if (scaleY) current.y = desired.y;
-                if (scaleZ) current.z = desired.z;
-                TransformMath.SetWorldScale(t, current);
+                var scale = current;
+                if (scaleX) scale.x = desired.x;
+                if (scaleY) scale.y = desired.y;
+                if (scaleZ) scale.z = desired.z;
+                if (scale != current)
+                    TransformMath.SetWorldScale(t, scale);
             }
             else
             {
-                var current = t.localScale;
-                if (scaleX) current.x = desired.x;
-                if (scaleY) current.y = desired.y;
-                if (scaleZ) current.z = desired.z;
-                t.localScale = current;
+                var scale = t.localScale;
+                if (scaleX) scale.x = desired.x;
+                if (scaleY) scale.y = desired.y;
+                if (scaleZ) scale.z = desired.z;
+                if (scale != t.localScale)
+                    t.localScale = scale;
             }
         }
 
@@ -442,6 +461,36 @@ namespace Samirin33.NDMF.Components
         }
 
         private Animator FindHumanoidAnimator()
+        {
+            if (!UsesHumanoidSource())
+                return null;
+
+#if UNITY_EDITOR
+            // エディタでは LateUpdate から毎フレーム呼ばれるため、見つけた Animator を使い回す。
+            if (!Application.isPlaying)
+            {
+                if (_cachedAnimator != null && _cachedAnimator.isHuman && transform.IsChildOf(_cachedAnimator.transform))
+                    return _cachedAnimator;
+                _cachedAnimator = FindHumanoidAnimatorUncached();
+                return _cachedAnimator;
+            }
+#endif
+            return FindHumanoidAnimatorUncached();
+        }
+
+        private bool UsesHumanoidSource()
+        {
+            if (sources == null)
+                return false;
+            foreach (var entry in sources)
+            {
+                if (entry != null && entry.kind == SourceKind.HumanoidBone)
+                    return true;
+            }
+            return false;
+        }
+
+        private Animator FindHumanoidAnimatorUncached()
         {
             var avatarRoot = RuntimeUtil.FindAvatarInParents(transform);
             if (avatarRoot == null)

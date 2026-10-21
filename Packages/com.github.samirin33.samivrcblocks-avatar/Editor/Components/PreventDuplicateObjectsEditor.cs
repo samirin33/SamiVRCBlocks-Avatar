@@ -6,6 +6,7 @@ using Samirin33.NDMF.Components;
 namespace Samirin33.NDMF.Components.Editor
 {
     [CustomEditor(typeof(PreventDuplicateObjects))]
+    [CanEditMultipleObjects]
     public class PreventDuplicateObjectsEditor : SamirinMABaseEditor
     {
         private SerializedProperty _id;
@@ -25,7 +26,7 @@ namespace Samirin33.NDMF.Components.Editor
                     "同じidを持つコンポーネントがアバター内に複数ある場合に重複を回避します。",
                     MessageType.Info);
 
-                EditorGUILayout.PropertyField(_id, new GUIContent("ID"));
+                EditorGUILayout.PropertyField(_id, new GUIContent("ID", "同じ ID を持つオブジェクトはアバター内で 1 つだけ残します"));
 
                 serializedObject.ApplyModifiedProperties();
             });

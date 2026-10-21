@@ -7,15 +7,22 @@ using Samirin33.NDMF.Components;
 
 namespace Samirin33.NDMF.Components.Editor
 {
+    // パス入力の解決に target のアバタールートを使うため、複数選択編集には対応しない
     [CustomEditor(typeof(InverseBoneProxy))]
     public class InverseBoneProxyEditor : SamirinMABaseEditor
     {
-        static readonly string[] AttachmentModeLabels =
+        static readonly GUIContent TargetObjectContent = new GUIContent("対象オブジェクト", "自身の子に置く対象（アバター配下）。ビルド時に MA Bone Proxy を付与します");
+        static readonly GUIContent TargetPathContent = new GUIContent("対象のパス", "アバタールートからの相対パス。入力を確定（Enter またはフォーカス移動）したときに対象を検索します");
+        static readonly GUIContent AttachmentModeContent = new GUIContent("配置モード", "位置・回転の適用方法（MA Bone Proxy の Attachment Mode と同じ）");
+        static readonly GUIContent MatchScaleContent = new GUIContent("スケールを合わせる", "スケールを対象に合わせます（MA Bone Proxy の Match Scale と同じ）");
+        static readonly GUIContent EditorApplyContent = new GUIContent("エディタでプレビュー", "エディタ上で対象 Transform に位置・回転・スケールをプレビュー適用します");
+
+        static readonly GUIContent[] AttachmentModeContents =
         {
-            "As Child At Root（位置・回転とも合わせる）",
-            "As Child Keep World Pose（ワールド姿勢を維持）",
-            "As Child Keep Rotation（回転を維持・位置のみ合わせる）",
-            "As Child Keep Position（位置を維持・回転のみ合わせる）",
+            new GUIContent("As Child At Root（位置・回転とも合わせる）"),
+            new GUIContent("As Child Keep World Pose（ワールド姿勢を維持）"),
+            new GUIContent("As Child Keep Rotation（回転を維持・位置のみ合わせる）"),
+            new GUIContent("As Child Keep Position（位置を維持・回転のみ合わせる）"),
         };
 
         static readonly BoneProxyAttachmentMode[] AttachmentModeValues =
@@ -53,17 +60,17 @@ namespace Samirin33.NDMF.Components.Editor
                     "対象を自身の子に置きます。",
                     MessageType.Info);
 
-                EditorGUILayout.PropertyField(_targetObject, new GUIContent("Target Object"));
+                EditorGUILayout.PropertyField(_targetObject, TargetObjectContent);
 
                 EditorGUI.BeginChangeCheck();
                 var path = _referencePath?.stringValue ?? "";
-                var newPath = EditorGUILayout.TextField("Target Object Path", path);
+                var newPath = EditorGUILayout.DelayedTextField(TargetPathContent, path);
                 if (EditorGUI.EndChangeCheck() && _referencePath != null)
                     ApplyPathString(newPath);
 
                 DrawAttachmentModePopup();
                 DrawMatchScaleField();
-                EditorGUILayout.PropertyField(_editorApplyTransform, new GUIContent("Editor Apply Transform"));
+                EditorGUILayout.PropertyField(_editorApplyTransform, EditorApplyContent);
 
                 serializedObject.ApplyModifiedProperties();
             });
@@ -76,13 +83,12 @@ namespace Samirin33.NDMF.Components.Editor
 
             if (InverseBoneProxyUtil.SupportsBoneProxyMatchScale)
             {
-                EditorGUILayout.PropertyField(_matchScale, new GUIContent("Match Scale"));
+                EditorGUILayout.PropertyField(_matchScale, MatchScaleContent);
                 return;
             }
 
-            EditorGUI.BeginDisabledGroup(true);
-            EditorGUILayout.PropertyField(_matchScale, new GUIContent("Match Scale"));
-            EditorGUI.EndDisabledGroup();
+            using (new EditorGUI.DisabledScope(true))
+                EditorGUILayout.PropertyField(_matchScale, MatchScaleContent);
             DrawHelpBoxWithDefaultFont(
                 "現在の Modular Avatar の Bone Proxy には Match Scale がありません。この項目は無視されます。",
                 MessageType.Info);
@@ -109,7 +115,7 @@ namespace Samirin33.NDMF.Components.Editor
             }
 
             EditorGUI.BeginChangeCheck();
-            index = EditorGUILayout.Popup("Attachment Mode", index, AttachmentModeLabels);
+            index = EditorGUILayout.Popup(AttachmentModeContent, index, AttachmentModeContents);
             if (EditorGUI.EndChangeCheck())
                 _attachmentMode.enumValueIndex = (int)AttachmentModeValues[index];
         }

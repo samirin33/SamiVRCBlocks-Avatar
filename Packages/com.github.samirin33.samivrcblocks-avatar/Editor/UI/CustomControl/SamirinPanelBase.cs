@@ -15,14 +15,15 @@ namespace Samirin.VRCUtility.Avatars.UI
 
         public new class UxmlTraits : VisualElement.UxmlTraits { }
 
-        private const string UxmlPath = "Packages/com.github.samirin33.samirin-vrc-utility.avatars/Editor/UI/SPanel.uxml";
+        // パッケージ名やフォルダ構成が変わっても読み込めるよう GUID で参照する（SPanel.uxml）
+        private const string UxmlGuid = "0dc040cab529f1b42ab228e09e728787";
 
         /// <summary>背景付きのコンテナ（name="Background"）。子要素はこの中に追加してください。</summary>
         public VisualElement Background => this.Q("Background");
 
         public SamirinPanelBase()
         {
-            var tree = AssetDatabase.LoadAssetAtPath<VisualTreeAsset>(UxmlPath);
+            var tree = AssetDatabase.LoadAssetAtPath<VisualTreeAsset>(AssetDatabase.GUIDToAssetPath(UxmlGuid));
             if (tree != null)
                 tree.CloneTree(this);
 

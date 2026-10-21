@@ -1,11 +1,11 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using UnityEditor;
 using UnityEditor.Animations;
 using UnityEngine;
 using VRC.SDK3.Avatars.Components;
+using Samirin33.NDMF.Base;
 using Samirin33.NDMF.Base.Plugin;
 using Samirin33.NDMF.Components;
 
@@ -90,14 +90,17 @@ namespace Samirin33.NDMF.Components.Editor
                     if (setting.paramType != ObserveParameterValueChange.ParamType.Bool
                         && !ObserveParameterValueChange.TryGetQuantizeMapping(setting, out _))
                     {
-                        Debug.LogWarning($"[ObserveParameterValueChange] {paramName} は監視段が1つのためスキップしました。間隔を範囲より小さくしてください。");
+                        SamirinBuildContext.ReportWarning(
+                            $"[ObserveParameterValueChange] {paramName} は監視段が1つのためスキップしました。間隔を範囲より小さくしてください。",
+                            component);
                         continue;
                     }
 
                     if (ObserveParameterValueChange.TryGetBucketInfo(setting, out var info) && info.thresholdClamped)
                     {
-                        Debug.LogWarning(
-                            $"[ObserveParameterValueChange] {paramName} の段数が {ObserveParameterValueChange.MaxBucketCount} を超えるため、間隔を {info.effectiveThreshold} に広げて生成します。");
+                        SamirinBuildContext.ReportWarning(
+                            $"[ObserveParameterValueChange] {paramName} の段数が {ObserveParameterValueChange.MaxBucketCount} を超えるため、間隔を {info.effectiveThreshold} に広げて生成します。",
+                            component);
                     }
 
                     merged.Add(setting);
@@ -109,17 +112,13 @@ namespace Samirin33.NDMF.Components.Editor
 
         private static AnimatorController CreateController(ObserveParameterValueChange.ObserveSetting[] settings, bool writeDefault)
         {
-            if (!Directory.Exists(GeneratedFolder))
-                Directory.CreateDirectory(GeneratedFolder);
-
             var emptyMotion = LoadEmptyMotion();
             var paramDriverType = typeof(VRCAvatarParameterDriver);
 
-            var controllerPath = $"{GeneratedFolder}/ObserveParameterValueChange_Generated.controller";
-            if (AssetDatabase.LoadAssetAtPath<AnimatorController>(controllerPath) != null)
-                AssetDatabase.DeleteAsset(controllerPath);
-
-            var controller = AnimatorController.CreateAnimatorControllerAtPath(controllerPath);
+            const string controllerName = "ObserveParameterValueChange_Generated";
+            var controller = ModularAvatarMergeAnimatorUtility.CreateGeneratedController(
+                controllerName,
+                $"{GeneratedFolder}/{controllerName}.controller");
             if (controller == null)
                 return null;
 
@@ -181,9 +180,7 @@ namespace Samirin33.NDMF.Components.Editor
 
             AddTriggerDrivers(controller, triggerByLayer, paramDriverType);
 
-            EditorUtility.SetDirty(controller);
-            UnityEditorInternal.InternalEditorUtility.RepaintAllViews();
-            return ModularAvatarMergeAnimatorUtility.ReloadControllerAtPath(controllerPath);
+            return ModularAvatarMergeAnimatorUtility.FinalizeGeneratedController(controller);
         }
 
         private static AnimatorControllerLayer CreateQuantizeLayer(AnimationClip emptyMotion, bool writeDefault)
@@ -512,28 +509,6 @@ namespace Samirin33.NDMF.Components.Editor
         }
 
         private static AnimationClip LoadEmptyMotion()
-        {
-            var path = AssetDatabase.GUIDToAssetPath(EmptyMotionGUID);
-            if (!string.IsNullOrEmpty(path))
-            {
-                var loadedClip = AssetDatabase.LoadAssetAtPath<AnimationClip>(path);
-                if (loadedClip != null)
-                    return loadedClip;
-            }
-
-            if (!Directory.Exists(GeneratedFolder))
-                Directory.CreateDirectory(GeneratedFolder);
-
-            var clipPath = $"{GeneratedFolder}/ObserveParameterValueChange_Empty.anim";
-            var emptyClip = AssetDatabase.LoadAssetAtPath<AnimationClip>(clipPath);
-            if (emptyClip == null)
-            {
-                emptyClip = new AnimationClip();
-                AssetDatabase.CreateAsset(emptyClip, clipPath);
-                AssetDatabase.SaveAssets();
-            }
-
-            return emptyClip;
-        }
+            => ModularAvatarMergeAnimatorUtility.LoadOrCreateEmptyClip(EmptyMotionGUID, $"{GeneratedFolder}/ObserveParameterValueChange_Empty.anim");
     }
 }

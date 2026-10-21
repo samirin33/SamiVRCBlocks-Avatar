@@ -32,47 +32,54 @@ namespace Samirin33.NDMF.Constraints
 
         private static Component GetConstraintComponent(GameObject gameObject, Type constraintType)
         {
+            if (gameObject == null)
+                return null;
+
             if (constraintType == typeof(PositionConstraintWrapper))
-            {
-                return gameObject.GetComponent<UnityEngine.Animations.PositionConstraint>()
-                    ?? (Component)gameObject.GetComponent<VRC.SDK3.Dynamics.Constraint.Components.VRCPositionConstraint>();
-            }
+                return GetFirst<UnityEngine.Animations.PositionConstraint, VRC.SDK3.Dynamics.Constraint.Components.VRCPositionConstraint>(gameObject);
             if (constraintType == typeof(RotationConstraintWrapper))
-            {
-                return gameObject.GetComponent<UnityEngine.Animations.RotationConstraint>()
-                    ?? (Component)gameObject.GetComponent<VRC.SDK3.Dynamics.Constraint.Components.VRCRotationConstraint>();
-            }
+                return GetFirst<UnityEngine.Animations.RotationConstraint, VRC.SDK3.Dynamics.Constraint.Components.VRCRotationConstraint>(gameObject);
             if (constraintType == typeof(ParentConstraintWrapper))
-            {
-                return gameObject.GetComponent<UnityEngine.Animations.ParentConstraint>()
-                    ?? (Component)gameObject.GetComponent<VRC.SDK3.Dynamics.Constraint.Components.VRCParentConstraint>();
-            }
+                return GetFirst<UnityEngine.Animations.ParentConstraint, VRC.SDK3.Dynamics.Constraint.Components.VRCParentConstraint>(gameObject);
             if (constraintType == typeof(ScaleConstraintWrapper))
-            {
-                return gameObject.GetComponent<UnityEngine.Animations.ScaleConstraint>()
-                    ?? (Component)gameObject.GetComponent<VRC.SDK3.Dynamics.Constraint.Components.VRCScaleConstraint>();
-            }
+                return GetFirst<UnityEngine.Animations.ScaleConstraint, VRC.SDK3.Dynamics.Constraint.Components.VRCScaleConstraint>(gameObject);
             if (constraintType == typeof(AimConstraintWrapper))
-            {
-                return gameObject.GetComponent<UnityEngine.Animations.AimConstraint>()
-                    ?? (Component)gameObject.GetComponent<VRC.SDK3.Dynamics.Constraint.Components.VRCAimConstraint>();
-            }
+                return GetFirst<UnityEngine.Animations.AimConstraint, VRC.SDK3.Dynamics.Constraint.Components.VRCAimConstraint>(gameObject);
             if (constraintType == typeof(LookAtConstraintWrapper))
-            {
-                return gameObject.GetComponent<UnityEngine.Animations.LookAtConstraint>()
-                    ?? (Component)gameObject.GetComponent<VRC.SDK3.Dynamics.Constraint.Components.VRCLookAtConstraint>();
-            }
+                return GetFirst<UnityEngine.Animations.LookAtConstraint, VRC.SDK3.Dynamics.Constraint.Components.VRCLookAtConstraint>(gameObject);
+
             if (constraintType == typeof(AllConstraint))
             {
                 // AllConstraintの場合は全ての型を順に試す
-                var component = GetConstraintComponent(gameObject, typeof(PositionConstraintWrapper))
-                    ?? GetConstraintComponent(gameObject, typeof(RotationConstraintWrapper))
-                    ?? GetConstraintComponent(gameObject, typeof(ParentConstraintWrapper))
-                    ?? GetConstraintComponent(gameObject, typeof(ScaleConstraintWrapper))
-                    ?? GetConstraintComponent(gameObject, typeof(AimConstraintWrapper))
-                    ?? GetConstraintComponent(gameObject, typeof(LookAtConstraintWrapper));
-                return component;
+                var candidates = new[]
+                {
+                    typeof(PositionConstraintWrapper),
+                    typeof(RotationConstraintWrapper),
+                    typeof(ParentConstraintWrapper),
+                    typeof(ScaleConstraintWrapper),
+                    typeof(AimConstraintWrapper),
+                    typeof(LookAtConstraintWrapper),
+                };
+                foreach (var candidate in candidates)
+                {
+                    var component = GetConstraintComponent(gameObject, candidate);
+                    if (component != null)
+                        return component;
+                }
             }
+
+            return null;
+        }
+
+        // GetComponent は見つからないとき Unity の偽 null を返すことがあり、?? では次の候補へ進まないため TryGetComponent を使う。
+        private static Component GetFirst<TUnity, TVrc>(GameObject gameObject)
+            where TUnity : Component
+            where TVrc : Component
+        {
+            if (gameObject.TryGetComponent<TUnity>(out var unityConstraint))
+                return unityConstraint;
+            if (gameObject.TryGetComponent<TVrc>(out var vrcConstraint))
+                return vrcConstraint;
             return null;
         }
     }

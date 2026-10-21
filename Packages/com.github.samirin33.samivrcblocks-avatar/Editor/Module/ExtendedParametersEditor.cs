@@ -3,16 +3,50 @@ using System.Linq;
 using UnityEngine;
 using UnityEditor;
 using UnityEditor.Animations;
-using Samirin33.Editor;
 using Samirin33.NDMF.Base.Editor;
 using Samirin33.NDMF.Module;
 
 namespace Samirin33.NDMF.Module.Editor
 {
+    // target を直接参照する処理があるため、複数選択編集には対応しない
     [CustomEditor(typeof(ExtendedParameters))]
     public class ExtendedParametersEditor : SamirinMABaseEditor
     {
         private const string ParameterPrefabsFolderGUID = "c657f4c093306024f8e25fa39b21baf0";
+
+        private string _folderPath;
+        private List<GameObject> _availablePrefabs;
+        private readonly Dictionary<GameObject, ExtendedParamInfo[]> _paramInfoCache = new Dictionary<GameObject, ExtendedParamInfo[]>();
+
+        private void OnEnable()
+        {
+            InvalidateCache();
+            EditorApplication.projectChanged += InvalidateCache;
+        }
+
+        private void OnDisable()
+        {
+            EditorApplication.projectChanged -= InvalidateCache;
+        }
+
+        private void InvalidateCache()
+        {
+            _folderPath = null;
+            _availablePrefabs = null;
+            _paramInfoCache.Clear();
+            Repaint();
+        }
+
+        private ExtendedParamInfo[] GetParamInfos(GameObject prefab)
+        {
+            if (!_paramInfoCache.TryGetValue(prefab, out var infos))
+            {
+                infos = prefab.GetComponentsInChildren<ExtendedParamInfo>(true);
+                _paramInfoCache[prefab] = infos;
+            }
+
+            return infos;
+        }
 
         public override void OnInspectorGUI()
         {
@@ -20,7 +54,7 @@ namespace Samirin33.NDMF.Module.Editor
             {
                 serializedObject.Update();
 
-                EditorGUILayout.HelpBox(
+                DrawHelpBoxWithDefaultFont(
                     "Animatorで新しく取得できるパラメーターを追加することができます！",
                     MessageType.Info);
 
@@ -43,7 +77,7 @@ namespace Samirin33.NDMF.Module.Editor
                     {
                         if (prefab == null) continue;
 
-                        var paramInfos = prefab.GetComponentsInChildren<ExtendedParamInfo>(true);
+                        var paramInfos = GetParamInfos(prefab);
                         if (paramInfos.Length == 0) continue;
 
                         EditorGUILayout.Space(5);
@@ -55,7 +89,7 @@ namespace Samirin33.NDMF.Module.Editor
 
                         foreach (var paramInfo in paramInfos)
                         {
-                            var componentPath = GetGameObjectPath(paramInfo.gameObject, prefab.transform);
+                            if (paramInfo == null) continue;
 
                             if (paramInfo.paramInfos == null || paramInfo.paramInfos.Length == 0)
                             {
@@ -63,44 +97,15 @@ namespace Samirin33.NDMF.Module.Editor
                                 continue;
                             }
 
+                            var removeIndex = -1;
                             for (var paramIndex = 0; paramIndex < paramInfo.paramInfos.Length; paramIndex++)
                             {
-                                var param = paramInfo.paramInfos[paramIndex];
-                                EditorGUILayout.BeginHorizontal();
-                                EditorGUILayout.PrefixLabel($"    {param.paramName}");
-                                GUILayout.FlexibleSpace();
-                                if (GUILayout.Button("コピー", GUILayout.Width(50)))
-                                {
-                                    EditorGUIUtility.systemCopyBuffer = param.paramName ?? "";
-                                }
-                                if (GUILayout.Button("削除", GUILayout.Width(50)))
-                                {
-                                    var so = new SerializedObject(paramInfo);
-                                    var paramInfosProp = so.FindProperty("paramInfos");
-                                    if (paramInfosProp != null && paramIndex >= 0 && paramIndex < paramInfosProp.arraySize)
-                                    {
-                                        so.Update();
-                                        paramInfosProp.DeleteArrayElementAtIndex(paramIndex);
-                                        so.ApplyModifiedProperties();
-                                        EditorUtility.SetDirty(paramInfo);
-                                        AssetDatabase.SaveAssets();
-                                    }
-                                    break;
-                                }
-                                EditorGUILayout.EndHorizontal();
-
-                                var explanation = param.paramExplanation ?? "";
-                                var defaultStr = GetDefaultValueString(param);
-                                var wordWrappedLabel = EditorStyles.wordWrappedLabel;
-
-                                EditorGUILayout.BeginHorizontal();
-                                EditorGUILayout.LabelField($"Type: {param.paramType.ToString()}", GUILayout.Width(80));
-                                EditorGUILayout.LabelField(string.IsNullOrEmpty(defaultStr) ? "" : $"Default: {defaultStr}", GUILayout.Width(120));
-                                EditorGUILayout.EndHorizontal();
-                                EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-                                DrawWithDefaultFont(() => EditorGUILayout.LabelField(explanation, wordWrappedLabel));
-                                EditorGUILayout.EndVertical();
+                                if (DrawParamInfo(paramInfo.paramInfos[paramIndex]))
+                                    removeIndex = paramIndex;
                             }
+
+                            if (removeIndex >= 0)
+                                RemoveParamInfo(paramInfo, removeIndex);
                         }
 
                         EditorGUILayout.EndVertical();
@@ -113,6 +118,64 @@ namespace Samirin33.NDMF.Module.Editor
                     AddMissingParametersToAnimator(extendedParameters);
                 }
             });
+        }
+
+        /// <returns>削除ボタンが押されたとき true。</returns>
+        private bool DrawParamInfo(ExtendedParamInfo.ParamInfo param)
+        {
+            var removeClicked = false;
+
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.PrefixLabel($"    {param.paramName}");
+            GUILayout.FlexibleSpace();
+            if (GUILayout.Button("コピー", GUILayout.Width(50)))
+            {
+                EditorGUIUtility.systemCopyBuffer = param.paramName ?? "";
+            }
+            if (GUILayout.Button(new GUIContent("削除", "パラメーター定義プレファブからこの項目を削除します（プレファブ自体を書き換えます）"), GUILayout.Width(50)))
+            {
+                removeClicked = true;
+            }
+            EditorGUILayout.EndHorizontal();
+
+            var explanation = param.paramExplanation ?? "";
+            var defaultStr = GetDefaultValueString(param);
+            var wordWrappedLabel = EditorStyles.wordWrappedLabel;
+
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.LabelField($"Type: {param.paramType.ToString()}", GUILayout.Width(80));
+            EditorGUILayout.LabelField(string.IsNullOrEmpty(defaultStr) ? "" : $"Default: {defaultStr}", GUILayout.Width(120));
+            EditorGUILayout.EndHorizontal();
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            DrawWithDefaultFont(() => EditorGUILayout.LabelField(explanation, wordWrappedLabel));
+            EditorGUILayout.EndVertical();
+
+            return removeClicked;
+        }
+
+        private void RemoveParamInfo(ExtendedParamInfo paramInfo, int paramIndex)
+        {
+            if (paramInfo.paramInfos == null || paramIndex < 0 || paramIndex >= paramInfo.paramInfos.Length)
+                return;
+
+            var paramName = paramInfo.paramInfos[paramIndex].paramName;
+            var assetPath = AssetDatabase.GetAssetPath(paramInfo);
+            var message = string.IsNullOrEmpty(assetPath)
+                ? $"パラメーター「{paramName}」を削除しますか？"
+                : $"パラメーター「{paramName}」をプレファブから削除しますか？\n\n{assetPath}\n\nこのプレファブを使っているすべてのアバターに影響します。";
+            if (!EditorUtility.DisplayDialog("パラメーターの削除", message, "削除", "キャンセル"))
+                GUIUtility.ExitGUI();
+
+            Undo.RecordObject(paramInfo, "パラメーターを削除");
+            var list = paramInfo.paramInfos.ToList();
+            list.RemoveAt(paramIndex);
+            paramInfo.paramInfos = list.ToArray();
+            EditorUtility.SetDirty(paramInfo);
+            if (!string.IsNullOrEmpty(assetPath))
+                AssetDatabase.SaveAssetIfDirty(paramInfo);
+
+            _paramInfoCache.Clear();
+            GUIUtility.ExitGUI();
         }
 
         private static void AddMissingParametersToAnimator(ExtendedParameters extendedParameters)
@@ -251,42 +314,34 @@ namespace Samirin33.NDMF.Module.Editor
             }
         }
 
-        private static string GetGameObjectPath(GameObject obj, Transform root)
-        {
-            var path = obj.name;
-            var current = obj.transform.parent;
-            while (current != null && current != root)
-            {
-                path = current.name + "/" + path;
-                current = current.parent;
-            }
-            return path;
-        }
-
         private void DrawParameterPrefabsSelector()
         {
             var prefabsProp = serializedObject.FindProperty("parameterPrefabs");
             if (prefabsProp == null) return;
 
-            var folderPath = AssetDatabase.GUIDToAssetPath(ParameterPrefabsFolderGUID);
-            if (string.IsNullOrEmpty(folderPath))
+            if (_folderPath == null)
+                _folderPath = AssetDatabase.GUIDToAssetPath(ParameterPrefabsFolderGUID) ?? string.Empty;
+
+            if (string.IsNullOrEmpty(_folderPath))
             {
                 DrawHelpBoxWithDefaultFont($"GUID {ParameterPrefabsFolderGUID} のフォルダが見つかりません。", MessageType.Warning);
                 EditorGUILayout.PropertyField(prefabsProp, true);
                 return;
             }
 
-            var availablePrefabs = GetPrefabsInFolder(folderPath);
-            if (availablePrefabs.Count == 0)
+            if (_availablePrefabs == null)
+                _availablePrefabs = GetPrefabsInFolder(_folderPath);
+
+            if (_availablePrefabs.Count == 0)
             {
-                DrawHelpBoxWithDefaultFont($"フォルダ \"{folderPath}\" にプレファブがありません。", MessageType.Info);
+                DrawHelpBoxWithDefaultFont($"フォルダ \"{_folderPath}\" にプレファブがありません。", MessageType.Info);
             }
             else
             {
                 EditorGUILayout.BeginHorizontal();
                 if (GUILayout.Button("パラメーター追加プレファブを追加"))
                 {
-                    ShowPrefabSelectionMenu(availablePrefabs);
+                    ShowPrefabSelectionMenu(_availablePrefabs);
                 }
                 EditorGUILayout.EndHorizontal();
             }
@@ -345,6 +400,7 @@ namespace Samirin33.NDMF.Module.Editor
 
                     s.parameterPrefabs = list.ToArray();
                     EditorUtility.SetDirty(s);
+                    PrefabUtility.RecordPrefabInstancePropertyModifications(s);
                 });
             }
 
