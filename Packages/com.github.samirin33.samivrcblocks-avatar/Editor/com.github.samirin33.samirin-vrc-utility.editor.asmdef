@@ -9,6 +9,7 @@
         "VRC.SDKBase.Editor",
         "VRC.Dynamics",
         "VRC.SDK3.Dynamics.Constraint",
+        "VRC.SDK3.Dynamics.Contact",
         "nadena.dev.ndmf",
         "nadena.dev.ndmf.runtime",
         "nadena.dev.ndmf.vrchat",
@@ -24,6 +25,12 @@
     "precompiledReferences": [],
     "autoReferenced": true,
     "defineConstraints": [],
-    "versionDefines": [],
+    "versionDefines": [
+        {
+            "name": "com.vrchat.base",
+            "expression": "3.10.6",
+            "define": "SAMIVRCBLOCKS_VRCSDK_CONTACT_ADVANCED_PARAMS"
+        }
+    ],
     "noEngineReferences": false
 }

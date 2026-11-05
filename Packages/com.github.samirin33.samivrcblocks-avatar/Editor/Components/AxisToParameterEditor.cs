@@ -205,7 +205,7 @@ namespace Samirin33.NDMF.Components.Editor
             }
 
             var tooltip = reference == null
-                ? "エディタ上の姿勢から計算した値です。実行時のワールド基準はアバター読み込み時の向きなので、ヨーはその向きからの角度になります"
+                ? "エディタ上の姿勢から計算した値です。実行時のワールド基準は WorldFix と同じ World プレハブ（ワールド軸）です"
                 : "エディタ上の姿勢から計算した値です。実際の値はビルド後に Contact から求めます";
             EditorGUILayout.LabelField(new GUIContent("現在の値（目安）", tooltip), new GUIContent(text));
         }

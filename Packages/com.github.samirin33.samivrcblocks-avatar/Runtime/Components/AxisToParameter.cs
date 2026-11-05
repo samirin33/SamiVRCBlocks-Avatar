@@ -7,10 +7,12 @@ namespace Samirin33.NDMF.Components
 {
     /// <summary>
     /// 自身または指定オブジェクトの、基準オブジェクトから見た X/Y/Z 軸まわりの回転角を Float パラメーターとして取得する。
-    /// ビルド時（Generating, MA の前）に、Box 型 Contact の値（sin/cos 相当）の組み合わせから角度を復元する
+    /// ビルド時（Generating, MA の前）に、Contact で読んだ Sender 座標（sin/cos 相当）から角度を復元する
     /// AAP BlendTree の Animator を生成して MA Merge Animator で統合する。
-    /// Transforming（MA の後）に、このオブジェクトの下へ VRC Rotation Constraint と Contact の構造
-    /// （Runtime/Components/Prefab/Axis2Prameter.prefab と同じ構造）を生成する。
+    /// 計測 Contact は SDK に応じて選ぶ（3.10.6+ では Advanced Parameters の SenderLocalPosition、
+    /// それ以外では Box Face Proximity）。パラメーター名はそれぞれ
+    /// `{prefix}_SenderLocalPositionX/Y/Z` / `{prefix}/X|Y|Z`。
+    /// Transforming（MA の後）に、このオブジェクトの下へ VRC Rotation Constraint と Contact の構造を生成する。
     /// このコンポーネントの Constraint 有効・Contact 有効を操作するアニメーションは、生成した Constraint / Contact へ書き換える。
     /// VRCFury 等が後から追加したアニメーションも拾うため、Optimizing（MA の前）でもう一度書き換えてから自身を削除する。
     /// </summary>
@@ -42,7 +44,7 @@ namespace Samirin33.NDMF.Components
             [Tooltip("回転を取得するオブジェクト。未指定なら自身")]
             public Transform target;
 
-            [Tooltip("このオブジェクトから見た回転を測る。未指定ならワールド（ヨーの 0° はアバター読み込み時の向き）")]
+            [Tooltip("このオブジェクトから見た回転を測る。未指定なら WorldFix と同じワールド基準（ワールド軸）")]
             public Transform reference;
 
             [Tooltip("回転軸（基準オブジェクトのローカル軸。基準が未指定ならワールドの軸）")]

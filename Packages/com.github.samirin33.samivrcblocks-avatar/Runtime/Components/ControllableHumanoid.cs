@@ -38,7 +38,7 @@ namespace Samirin33.NDMF.Components
                 public HumanBodyBones bone = HumanBodyBones.Hips;
                 public Transform childParent;
 
-                [Tooltip("オンのとき、付け替え前のワールド位置・回転・スケールを維持します。オフのとき、childParent との間にローカル座標を打ち消すオブジェクトを挟み、合成結果をローカル原点（位置 0、回転 0、スケール 1）にします。親のスケールが付け替え前と違うときは、オリジナルのスケールへ補正します。")]
+                [Tooltip("オンのとき、付け替え前のワールド位置・回転・スケールを維持します。オフのとき、childParent との間にローカル座標を打ち消すオブジェクトを挟み、合成結果をローカル原点（位置 0、回転 0、スケール 1）にします。親やボーンのスケールが 1 でなくても、生成元の見た目の大きさは保持します。")]
                 public bool keepLocal = true;
             }
 
@@ -51,7 +51,7 @@ namespace Samirin33.NDMF.Components
 
             public Transform childParent;
 
-            [Tooltip("オンのとき、付け替え前のワールド位置・回転・スケールを維持します。オフのとき、childParent との間にローカル座標を打ち消すオブジェクトを挟み、合成結果をローカル原点（位置 0、回転 0、スケール 1）にします。親のスケールが付け替え前と違うときは、オリジナルのスケールへ補正します。")]
+            [Tooltip("オンのとき、付け替え前のワールド位置・回転・スケールを維持します。オフのとき、childParent との間にローカル座標を打ち消すオブジェクトを挟み、合成結果をローカル原点（位置 0、回転 0、スケール 1）にします。親やボーンのスケールが 1 でなくても、生成元の見た目の大きさは保持します。")]
             public bool keepLocal = true;
 
             public List<ChildParentEntry> childParents = new List<ChildParentEntry>();

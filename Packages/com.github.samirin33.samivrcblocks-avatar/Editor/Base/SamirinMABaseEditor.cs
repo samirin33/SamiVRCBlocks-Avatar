@@ -73,9 +73,11 @@ namespace Samirin33.NDMF.Base.Editor
             EditorGUILayout.BeginHorizontal();
             EditorGUI.showMixedValue = mixed;
 
+            // Slider は数値欄付きなので使わず、HorizontalSlider + 右欄のみにする（値が二重表示されないように）
             // スライダーは常に 0〜1 固定にし、1 を超える値は右の欄だけで扱う（ドラッグ中に UI が切り替わらないように）
+            EditorGUILayout.PrefixLabel(label);
             EditorGUI.BeginChangeCheck();
-            var sliderValue = EditorGUILayout.Slider(label, Mathf.Clamp01(value), 0f, 1f);
+            var sliderValue = GUILayout.HorizontalSlider(Mathf.Clamp01(value), 0f, 1f);
             if (EditorGUI.EndChangeCheck())
             {
                 value = sliderValue;
@@ -85,6 +87,7 @@ namespace Samirin33.NDMF.Base.Editor
             var previousIndent = EditorGUI.indentLevel;
             EditorGUI.indentLevel = 0;
             var rawRect = EditorGUILayout.GetControlRect(false, EditorGUIUtility.singleLineHeight, GUILayout.Width(56f));
+            // DelayedFloatField にツールチップだけ載せたいので、空ラベルを同じ Rect に重ねる
             GUI.Label(rawRect, SmoothWeightRawFieldLabel);
             EditorGUI.BeginChangeCheck();
             var rawValue = EditorGUI.DelayedFloatField(rawRect, value);

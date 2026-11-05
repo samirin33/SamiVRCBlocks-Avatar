@@ -339,8 +339,14 @@ namespace Samirin33.NDMF.Components.Editor
             var localRotation = bone.localRotation;
             var localScale = bone.localScale;
             // ParentChild が自身のワールドスケールを保つと、ChildParent のスケールは
-            // 元ボーンの親とずれる。ボーン側はオリジナルのスケールへ戻す。
-            var receiver = ParentCorrectedToOriginalScale(parent, bone.name, worldScale, localScale);
+            // 元ボーンの親とずれる。受け側で生成元のスケール感を復元する。
+            // keepLocal: 付け替え前の親ワールドスケールへ合わせ、SetWorldPose 後もローカルスケールを維持。
+            // !keepLocal: LocalCancel で合成スケールが 1 になるため、受け側をボーンのワールドスケールにして
+            // ローカルスケールが 1 でないボーンでも見た目の大きさを残す。
+            var receiver = ParentCorrectedToTargetWorldScale(
+                parent,
+                bone.name,
+                keepLocal ? EffectiveParentWorldScale(worldScale, localScale) : worldScale);
 
             if (keepLocal)
             {
@@ -358,28 +364,30 @@ namespace Samirin33.NDMF.Components.Editor
         }
 
         /// <summary>
-        /// childParent のワールドスケールが付け替え前の実効親スケールと違うとき、
-        /// その差分を吸収する子を挟み、ボーンのローカルスケールがオリジナルのままになるようにする。
+        /// childParent のワールドスケールが目標と違うとき、その差分を吸収する子を挟む。
         /// </summary>
-        private static Transform ParentCorrectedToOriginalScale(
+        private static Transform ParentCorrectedToTargetWorldScale(
             Transform parent,
             string boneName,
-            Vector3 boneWorldScale,
-            Vector3 boneLocalScale)
+            Vector3 targetWorldScale)
         {
-            var originalScale = new Vector3(
-                DivideScale(boneWorldScale.x, boneLocalScale.x),
-                DivideScale(boneWorldScale.y, boneLocalScale.y),
-                DivideScale(boneWorldScale.z, boneLocalScale.z));
-            if (ScalesMatch(TransformMath.GetWorldScale(parent), originalScale))
+            if (ScalesMatch(TransformMath.GetWorldScale(parent), targetWorldScale))
                 return parent;
 
             var anchor = new GameObject(boneName + "_OriginalScale").transform;
             anchor.SetParent(parent, false);
             anchor.localPosition = Vector3.zero;
             anchor.localRotation = Quaternion.identity;
-            TransformMath.SetWorldScale(anchor, originalScale);
+            TransformMath.SetWorldScale(anchor, targetWorldScale);
             return anchor;
+        }
+
+        private static Vector3 EffectiveParentWorldScale(Vector3 boneWorldScale, Vector3 boneLocalScale)
+        {
+            return new Vector3(
+                DivideScale(boneWorldScale.x, boneLocalScale.x),
+                DivideScale(boneWorldScale.y, boneLocalScale.y),
+                DivideScale(boneWorldScale.z, boneLocalScale.z));
         }
 
         private static bool ScalesMatch(Vector3 a, Vector3 b)

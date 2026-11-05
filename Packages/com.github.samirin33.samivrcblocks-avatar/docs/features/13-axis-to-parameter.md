@@ -60,13 +60,11 @@
 
 ### ワールド基準
 
-アバターからはワールドの絶対的な向きを知る手段が無いため、基準が未指定の項目は「アバター読み込み時の向きでワールドに固定したオブジェクト」を基準にします。
+基準が未指定の項目は、[WorldFix](02-world-fix.md) / [RemapPosition](12-remap-position.md) と同じ World プレハブを `GetAxis_` の Rotation Constraint ソースにします（ワールド軸）。
 
-- 上下（X 軸・Z 軸の傾き）はワールドの水平・鉛直に一致します（読み込み時にアバターが直立している前提）。
-- Y 軸（ヨー）の 0° は、アバターを読み込んだときにアバターが向いていた方向です。ワールド内で向きを変えると、そこからの角度になります。
-- 読み込みのタイミングはプレイヤーごとに違うため、他のプレイヤーの環境ではヨーの 0° がずれます。上下の傾きは一致します。
-- `Constraint 有効` をオフ→オンにすると、その時点のアバターの向きで固定し直します（ヨーの 0° をリセットできます）。
-- エディタ上のプレビューは Unity のワールド軸で計算します。
+- 上下（X 軸・Z 軸の傾き）はワールドの水平・鉛直に一致します。
+- Y 軸（ヨー）の 0° もワールドの前方基準です。
+- エディタ上のプレビューも Unity のワールド軸で計算します。
 
 ### アニメーション
 
@@ -74,7 +72,7 @@
 
 | コンポーネントのプロパティ | 書き換え先 |
 |----------------------------|------------|
-| `constraintActive` | 生成したすべての VRC Rotation Constraint（ワールド基準のアンカーを含む）の `IsActive` |
+| `constraintActive` | 生成したすべての VRC Rotation Constraint の `IsActive` |
 | `contactActive` | 生成したすべての VRC Contact Sender / Receiver の `m_Enabled` |
 
 ## ビルド時の挙動
@@ -84,37 +82,39 @@
 Animator を生成し、このオブジェクトの子 `AxisToParameter_Module` に MA Merge Animator（FX、Write Defaults オン）として追加します。
 レイヤーは 1 ステートの Direct BlendTree で、次の 2 段で角度を復元します。
 
-1. 計測方式が用意した「Sender の座標に比例するパラメーター」から sin / cos 成分を線形結合し、項目ごとに「値が飛ぶ角度」が真後ろに来るよう回した 2 つの値（P, Q）を AAP で書く
+1. 計測方式が用意した「Sender の座標に比例するパラメーター」から sin / cos 成分を線形結合し、項目ごとに「値が飛ぶ角度」が真後ろに来るよう回した 2 つの値（P, Q）を AAP で書く（`SenderLocalPosition` は Direct 重みではなく 1D の blendParameter で写し、角度復元は次レイヤー）
 2. P の符号で左右を切り替え、それぞれを 2D Simple Directional（15° 間隔＋任意範囲の端）でブレンドして出力パラメーターへ書く
 
-Simple Directional は入力の長さがサンプルの輪（長さ 1）より短いと全サンプルの平均へ寄っていくため、P, Q は 100 倍して常に輪の外側に置いています。
-輪の外側では向きだけでブレンドされるので、他の軸の回転で sin / cos の大きさが縮んでも角度は変わりません（真横を向いて長さがほぼ 0 になる場合を除く）。
-1 段目の AAP を 2 段目が読むため、出力は 1 フレーム遅れます。
+Simple Directional は入力の長さがサンプルの輪（長さ 1）より短いと全サンプルの平均へ寄っていくため、P, Q は十分大きくして常に輪の外側に置いています。
+輪の外側では向きだけでブレンドされるので、コンポーネントスケールや他の軸の回転で sin / cos の大きさが変わっても角度は変わりません（真横を向いて長さがほぼ 0 になる場合を除く）。
+1 段目の AAP を 2 段目が読むため、出力は 1 フレーム遅れます（`SenderLocalPosition` では段ごとにレイヤーを分けます）。
 
 内部パラメーターは `SB_AxisToParameter/...` で始まる名前です（同期しません）。
 
 ### Transforming フェーズ（Modular Avatar の後）
 
-Merge Armature / Bone Proxy で階層が確定した後に、このオブジェクトの下へ次の構造を生成します（`Runtime/Components/Prefab/Axis2Prameter.prefab` と同じ構造）。
-同じターゲット・同じ基準の項目は Sender / Receiver を共有し、使わない軸の Receiver は生成しません。
+Merge Armature / Bone Proxy で階層が確定した後に、アバター直下へ次の構造を生成します。
+同じターゲット・同じ基準の項目は Sender / Receiver を共有します。
+
+SDK 3.10.6+（SenderLocalPosition）:
 
 ```
-このオブジェクト
-└─ AxisToParameter
-   └─ GetAxis_(ターゲット名)       … VRC Rotation Constraint（ソース = 基準）。リグごとに X 方向へ 0.2 ずつずらす
-      ├─ Rotation                  … VRC Rotation Constraint（ソース = ターゲット）
-      │  └─ Sender                 … 0° 方向へ 0.05 の位置。VRC Rotation Constraint（ソース = GetAxis）で向きを固定した Box Sender
-      ├─ Receiver_X / _Y / _Z      … 使う軸だけ。+Z 面を各軸の正方向へ向けた Box Receiver（Face Proximity）
-
 アバタールート
-└─ AxisToParameter_World           … 基準が未指定の項目があるときだけ。VRC Rotation Constraint（ソース = アバタールート、Freeze To World オン）
+└─ AxisToParameter                 … VRC Scale Constraint（ソース = WorldFix と同じ World プレハブ。ロスティスケール 1 固定）
+   └─ GetAxis_(ターゲット名)       … VRC Rotation Constraint（ソース = 基準。未指定なら World プレハブ）。リグごとに X 方向へ 0.2 ずつずらす
+      ├─ Rotation                  … VRC Rotation Constraint（ソース = ターゲット）
+      │  └─ Sender                 … 0° 方向へ 0.05 の位置。Sphere Sender（向き合わせ不要）
+      └─ Receiver_SenderLocalPosition … Sphere Receiver 1 つ。parameter 接頭辞 + Advanced Parameters の SenderLocalPosition
 ```
+
+コンテナをアバター直下に置きスケールをワールド固定するため、コンポーネント親のスケールに依らず Contact の実寸と `_SenderLocalPosition` の振幅（≈ ±0.05 m）は安定します。
+フォールバック（Box Face Proximity）では Sender に向き固定 Constraint が付き、使う軸だけ `Receiver_X / _Y / _Z` を生成します。
 
 Z 軸の項目は上方ベクトルを使うため、`GetAxis_(ターゲット名)_Up` を別に生成します。
-基準が未指定の項目では、`GetAxis_` の Constraint のソースが `AxisToParameter_World` になります。
+基準が未指定の項目では、`GetAxis_` の Constraint のソースが WorldFix と同じ World プレハブになります。
 
-| 取得する軸 | Sender の向き | 使う Receiver |
-|------------|---------------|---------------|
+| 取得する軸 | Sender の向き | 使う座標成分（sin / cos） |
+|------------|---------------|---------------------------|
 | X | 前方（+Z） | Y, Z |
 | Y | 前方（+Z） | X, Z |
 | Z | 上方（+Y） | X, Y |
@@ -124,29 +124,28 @@ VRCFury 等が後から追加したアニメーションも拾うため、Optimi
 
 ### 計測方式
 
-Contact から Sender の座標を読む部分は `AxisSensor`（`Editor/Components/AxisToParameterSensors.cs`）として差し替えられるようにしてあり、Animator とリグの生成はどちらもここを経由します。
-現在の方式は `BoxProximityAxisSensor` のみです（Receiver の値 `a` に対して `2a - 1` が座標 / 軌道半径にほぼ等しい）。
+Contact から Sender の座標を読む部分は `AxisSensor`（`Editor/Components/AxisToParameterSensors.cs`）として差し替えられるようにしてあり、Animator とリグの生成はどちらもここを経由します。優先順は次のとおりです。
 
-VRChat は今後の SDK で、Receiver が「Sender の中心点の、Receiver から見たローカル座標」をパラメーターとして出せるようにする予定です（[Developer Update - 13 August 2026](https://ask.vrchat.com/t/developer-update-13-august-2026/48800)）。
-これが使えるようになれば、次の手順で Receiver 1 つの方式へ移行できます。
+| 優先 | 方式 | 条件 | Contact | 座標パラメーター | BlendTree の正規化 |
+|------|------|------|---------|------------------|-------------------|
+| 1 | `SenderLocalPositionAxisSensor` | SDK 3.10.6+ | Sender 1 + Receiver 1 | `{prefix}_SenderLocalPositionX/Y/Z`（相対位置。振幅 ≈ ±0.05 m） | `値 / 0.05` |
+| 2 | `BoxProximityAxisSensor` | 常時（フォールバック） | Sender 1 + Receiver 2〜3 | `{prefix}/X|Y|Z` | `2a - 1` |
 
-1. `AxisSensor` を継承したクラスを作り、`GetChannel` で座標パラメーター名と線形変換（`Scale * 値 + Offset` が座標 / 0.05 m になるよう）を返す
-2. `CreateReceivers` で `GetAxis_` 直下に Receiver を 1 つ作る。Sender の向きを揃える必要が無いので `RequiresAlignedSender` は false にする
-3. `IsSupported` で SDK が対応しているかを判定し、`AxisSensors` の候補の先頭に足す
-
-角度の復元は sin / cos の比だけを使うため、座標の単位や倍率が全成分で共通なら結果は変わらず、BlendTree の生成側は変更不要です。
+インスペクタの「計測方式」表示で、実際に選ばれた方式を確認できます。
 コンポーネントの保存データは計測方式に依存しないので、既存のアバターも設定を変えずに新しい方式で再ビルドできます。
-テストの `GeneratedAnimator_RestoresAngleWithPositionSensor` は、単位と原点を変えた仮の座標方式で角度が復元できることを確認しています。
+
+ZeroToOne など一周する範囲では、角度 0° が不連続点になるため、P をわずかに valueMin 側へ寄せて 0° で 0 と 1 の平均（0.5）にならないようにしています。
 
 ## 注意事項
 
 - 出力パラメーターは Float として生成します。同名の Int / Bool パラメーターが他にあると Modular Avatar の型衝突になります。
 - 同じパラメーター名を複数の項目に指定した場合、2 つ目以降はスキップします（値が加算されて壊れるため）。
-- 現在の計測方式では、1 項目あたり Contact は Sender 1 + Receiver 2（同じターゲットの X と Y は Sender 1 + Receiver 3 を共有）。Local Only でない場合はパフォーマンスランクの Contact 数に含まれます。インスペクタに生成数を表示します。
+- Contact 数は計測方式と共有ユニット数で変わります（Local Only でない場合はパフォーマンスランクに含まれます）。インスペクタに生成数を表示します。
 - このオブジェクトやターゲットに非一様なスケールをかけると、Contact の形が歪んで値がずれます。
 - 「Animator をアセットとして書き出す」は確認用です。`Assets/Generated/SamiVRCBlocks/AxisToParameter/` に保存するだけで、シーンには何も追加しません。
 
 ## 関連
 
+- [WorldFix](02-world-fix.md) — 生成コンテナのスケール固定に同じ World プレハブを使用
 - [RemapPosition](12-remap-position.md) — 生成した Constraint へのアニメーション書き換えの仕組みが同じ
 - [ParameterSmoothing](04-parameter-smoothing.md) — 出力した値を滑らかにする

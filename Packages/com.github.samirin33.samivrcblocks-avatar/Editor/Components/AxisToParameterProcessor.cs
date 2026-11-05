@@ -46,12 +46,26 @@ namespace Samirin33.NDMF.Components.Editor
         /// <summary>
         /// P, Q（sin / cos 成分）にかける倍率。Simple Directional は中心にモーションが無いと、
         /// 入力がサンプルの円（半径 1）より内側の分だけ全サンプルの平均へ寄るため、円の外側へ出して向きだけでブレンドさせる。
-        /// 他の軸の回転で成分の長さが 1/100 未満（傾き約 89.4° 以上）になるまでは円の外に収まる。
+        /// SenderLocalPosition は振幅が OrbitRadius×コンポーネントロスティスケール程度なので、
+        /// スケールが 0.01 程度まで落ちても円の外に出るよう大きめにする。
         /// </summary>
-        private const float DirectionScale = 100f;
+        private const float DirectionScale = 1000f;
 
         /// <summary>不連続点の左右を切り替える幅（P の値）。この幅の中だけ左右の値が混ざる。</summary>
         private const float SeamEpsilon = 0.001f;
+
+        /// <summary>
+        /// 不連続点ちょうど（P = 0）で左右が半々に混ざり 0 と 1 の平均（0.5）になるのを避けるため、
+        /// P をわずかに負へ寄せて角度 0°（ZeroToOne の始点）が valueMin 側に落ちるようにする。
+        /// </summary>
+        private const float SeamSideBias = -SeamEpsilon;
+
+        /// <summary>
+        /// SenderLocalPosition を 1D BlendTree の blendParameter で線形写像するときの想定最大振幅（メートル）。
+        /// Advanced Parameters は Direct の重みにすると後段 AAP へ書けないことがあるため、blendParameter 経由にする。
+        /// OrbitRadius×コンポーネントスケールがこの範囲に収まる前提（通常は ±0.05 前後）。
+        /// </summary>
+        private const float PositionBlendRange = 2f;
 
         private const string IsActiveProperty = "IsActive";
         private const string EnabledProperty = "m_Enabled";
@@ -59,7 +73,7 @@ namespace Samirin33.NDMF.Components.Editor
         private sealed class Unit
         {
             public Transform Target;
-            /// <summary>コンポーネントに指定された基準。null ならワールド（読み込み時の向きで固定したアンカー）。</summary>
+            /// <summary>コンポーネントに指定された基準。null なら WorldFix の World プレハブ（ワールド原点の向き）。</summary>
             public Transform Reference;
             /// <summary>回転 0° のとき Sender がある方向（計測空間の +Y か +Z）。</summary>
             public Vector3 SenderDirection;
@@ -232,9 +246,8 @@ namespace Samirin33.NDMF.Components.Editor
             var plan = CreatePlan(component, null, 0, new HashSet<string>(), false);
             senders = plan.Units.Count;
             receivers = plan.Units.Sum(u => plan.Sensor.CountReceivers(u.Channels));
-            constraints = plan.Units.Count * (plan.Sensor.RequiresAlignedSender ? 3 : 2);
-            if (plan.Units.Any(u => u.Reference == null))
-                constraints++;
+            // コンテナの World スケール固定 1 + 各ユニットの Rotation Constraint
+            constraints = 1 + plan.Units.Count * (plan.Sensor.RequiresAlignedSender ? 3 : 2);
         }
 
         #endregion
@@ -327,45 +340,118 @@ namespace Samirin33.NDMF.Components.Editor
 
             controller.RemoveLayer(0);
 
+            var linearTerms = CollectLinearTerms(plan);
+            var clipCache = new Dictionary<(string, float), AnimationClip>();
+            var angleChildren = new List<ChildMotion>();
+            foreach (var entry in plan.Entries)
+            {
+                var tree = CreateAngleTree(entry, controller, clipCache);
+                angleChildren.Add(new ChildMotion { motion = tree, directBlendParameter = OneParameter, timeScale = 1f });
+            }
+
+            if (plan.Sensor.IsolateLinearParameterWrites && linearTerms.Count > 0)
+            {
+                // Advanced Parameters は Direct 重みだと後段から読めないことがある。
+                // blendParameter の 1D で P/Q を書き、角度復元は次レイヤーで読む。
+                AddDirectLayer(
+                    controller,
+                    LayerName + " Linear",
+                    BuildLinearTermChildren(linearTerms, controller, remapSignedPosition: true));
+                AddDirectLayer(controller, LayerName, angleChildren);
+            }
+            else
+            {
+                var children = new List<ChildMotion>();
+                children.AddRange(BuildLinearTermChildren(linearTerms, controller, remapSignedPosition: false));
+                children.AddRange(angleChildren);
+                AddDirectLayer(controller, LayerName, children);
+            }
+
+            AnimatorControllerAssetUtility.RegisterControllerHierarchy(controller);
+            return ModularAvatarMergeAnimatorUtility.FinalizeGeneratedController(controller);
+        }
+
+        private static void AddDirectLayer(AnimatorController controller, string name, List<ChildMotion> children)
+        {
             var root = new BlendTree
             {
-                name = LayerName,
+                name = name,
                 blendType = BlendTreeType.Direct,
                 useAutomaticThresholds = false,
             };
             AnimatorControllerAssetUtility.EnsureSubAsset(root, controller);
-
-            var children = new List<ChildMotion>();
-            foreach (var (weightParameter, values) in CollectLinearTerms(plan))
-            {
-                var clip = CreateParameterClip("Linear " + weightParameter, values, controller);
-                children.Add(new ChildMotion { motion = clip, directBlendParameter = weightParameter, timeScale = 1f });
-            }
-
-            var clipCache = new Dictionary<(string, float), AnimationClip>();
-            foreach (var entry in plan.Entries)
-            {
-                var tree = CreateAngleTree(entry, controller, clipCache);
-                children.Add(new ChildMotion { motion = tree, directBlendParameter = OneParameter, timeScale = 1f });
-            }
-
             root.children = children.ToArray();
 
-            var stateMachine = new AnimatorStateMachine { name = LayerName };
-            var state = stateMachine.AddState(LayerName, new Vector3(280f, 120f, 0f));
+            var stateMachine = new AnimatorStateMachine { name = name };
+            var state = stateMachine.AddState(name, new Vector3(280f, 120f, 0f));
             state.writeDefaultValues = true;
             state.motion = root;
             stateMachine.defaultState = state;
 
             controller.AddLayer(new AnimatorControllerLayer
             {
-                name = LayerName,
+                name = name,
                 defaultWeight = 1f,
                 stateMachine = stateMachine,
             });
+        }
 
-            AnimatorControllerAssetUtility.RegisterControllerHierarchy(controller);
-            return ModularAvatarMergeAnimatorUtility.FinalizeGeneratedController(controller);
+        /// <param name="remapSignedPosition">
+        /// true のとき、計測パラメーターを Direct 重みにせず 1D の blendParameter で線形写像する
+        ///（負値を取りうる SenderLocalPosition 向け）。
+        /// </param>
+        private static List<ChildMotion> BuildLinearTermChildren(
+            List<(string weight, Dictionary<string, float> values)> terms,
+            AnimatorController controller,
+            bool remapSignedPosition)
+        {
+            var children = new List<ChildMotion>();
+            foreach (var (weightParameter, values) in terms)
+            {
+                if (!remapSignedPosition || weightParameter == OneParameter)
+                {
+                    var clip = CreateParameterClip("Linear " + weightParameter, values, controller);
+                    children.Add(new ChildMotion { motion = clip, directBlendParameter = weightParameter, timeScale = 1f });
+                    continue;
+                }
+
+                var negValues = new Dictionary<string, float>();
+                var posValues = new Dictionary<string, float>();
+                foreach (var pair in values)
+                {
+                    negValues[pair.Key] = pair.Value * -PositionBlendRange;
+                    posValues[pair.Key] = pair.Value * PositionBlendRange;
+                }
+
+                var tree = new BlendTree
+                {
+                    name = "Map " + weightParameter,
+                    blendType = BlendTreeType.Simple1D,
+                    blendParameter = weightParameter,
+                    useAutomaticThresholds = false,
+                    minThreshold = -PositionBlendRange,
+                    maxThreshold = PositionBlendRange,
+                };
+                AnimatorControllerAssetUtility.EnsureSubAsset(tree, controller);
+                tree.children = new[]
+                {
+                    new ChildMotion
+                    {
+                        motion = CreateParameterClip("Linear " + weightParameter + " -", negValues, controller),
+                        threshold = -PositionBlendRange,
+                        timeScale = 1f,
+                    },
+                    new ChildMotion
+                    {
+                        motion = CreateParameterClip("Linear " + weightParameter + " +", posValues, controller),
+                        threshold = PositionBlendRange,
+                        timeScale = 1f,
+                    },
+                };
+                children.Add(new ChildMotion { motion = tree, directBlendParameter = OneParameter, timeScale = 1f });
+            }
+
+            return children;
         }
 
         private static void AddFloatParameter(AnimatorController controller, string name, float defaultValue)
@@ -385,6 +471,7 @@ namespace Samirin33.NDMF.Components.Editor
         /// 不連続点 σ の向き d = (cosσ, sinσ)（sin / cos 平面）に対し、P = d⊥ 成分、Q = -d 成分を作る。
         /// atan2(P, Q) = θ - σ - 180° なので、不連続点はちょうど Q 軸の負側（P = 0, Q &lt; 0）に来る。
         /// S = sinSign(scale_s·a_s + offset_s), C = scale_c·a_c + offset_c を代入すると、計測パラメーター a と定数 1 の線形結合になる。
+        /// SenderLocalPosition では a の振幅がコンポーネントスケールで変わるが、比だけ使うので角度は変わらない。
         /// </summary>
         private static List<(string weight, Dictionary<string, float> values)> CollectLinearTerms(Plan plan)
         {
@@ -424,6 +511,9 @@ namespace Samirin33.NDMF.Components.Editor
                 Add(cos.Parameter, entry.QParameter, -cosSeam * cos.Scale);
                 Add(sin.Parameter, entry.QParameter, -sinSeam * k * sin.Scale);
                 Add(OneParameter, entry.QParameter, -cosSeam * cos.Offset - sinSeam * k * sin.Offset);
+
+                // 不連続点上で P=0 のとき左右が混ざるのを避け、始点側（valueMin）へ寄せる
+                Add(OneParameter, entry.PParameter, SeamSideBias);
             }
 
             return order.Select(w => (w, terms[w])).ToList();
@@ -571,11 +661,23 @@ namespace Samirin33.NDMF.Components.Editor
             var state = AvatarStates.GetOrCreateValue(avatarRootObject);
             using (var animators = new SamirinAnimatorServicesScope(context))
             {
-                var parent = component.transform;
-                var container = CreateChild(parent, UniqueChildName(parent, "AxisToParameter"));
-                var worldAnchor = plan.Units.Any(u => u.Reference == null)
-                    ? CreateWorldAnchor(component, plan, avatarRootObject.transform)
-                    : null;
+                // コンポーネント配下だと親ボーンのスケールを引きずるため、アバター直下に置く。
+                var avatarRoot = avatarRootObject.transform;
+                var worldOrigin = WorldFix.GetWorldOriginTransform();
+                if (worldOrigin == null)
+                {
+                    SamirinBuildContext.ReportError(
+                        "[AxisToParameter] World プレハブが見つかりません。パッケージを再インストールしてください。",
+                        component);
+                    return;
+                }
+
+                var container = CreateChild(avatarRoot, UniqueChildName(avatarRoot, "AxisToParameter"));
+                // WorldFix と同じ World プレハブをソースにスケールをワールドへ固定する。
+                AddWorldScaleFix(container.gameObject, worldOrigin);
+
+                // 基準未指定は RemapPosition と同様、World プレハブを Rotation Constraint のソースにする。
+                var worldAnchor = plan.Units.Any(u => u.Reference == null) ? worldOrigin : null;
                 foreach (var unit in plan.Units)
                     BuildUnit(component, plan, unit, container, worldAnchor, state.UnitCount++);
                 plan.RigBuilt = true;
@@ -585,16 +687,25 @@ namespace Samirin33.NDMF.Components.Editor
         }
 
         /// <summary>
-        /// アバターはワールドの向きを知る手段が無いため、アバタールート直下（直立・プレイヤーの向き）に置いた
-        /// オブジェクトを Freeze To World で読み込み時の向きに固定し、ワールド基準として使う。
-        /// Constraint 有効をオフ→オンにすると、その時点の向きで固定し直す。
+        /// WorldFix（fixScale）と同じく、World プレハブをソースにした VRC Scale Constraint を付ける。
+        /// ロスティスケールを 1 に保ち、SenderLocalPosition の振幅と Contact 形状をワールドメートルで安定させる。
         /// </summary>
-        private static Transform CreateWorldAnchor(AxisToParameter component, Plan plan, Transform avatarRoot)
+        private static void AddWorldScaleFix(GameObject target, Transform worldOrigin)
         {
-            var anchor = CreateChild(avatarRoot, UniqueChildName(avatarRoot, "AxisToParameter_World"));
-            var constraint = AddRotationConstraint(anchor.gameObject, avatarRoot, component.constraintActive, freezeToWorld: true);
-            plan.Constraints.Add(constraint);
-            return anchor;
+            var raw = target.AddComponent<VRCScaleConstraint>();
+            raw.AffectsScaleX = true;
+            raw.AffectsScaleY = true;
+            raw.AffectsScaleZ = true;
+            raw.ScaleAtRest = Vector3.one;
+            raw.ScaleOffset = Vector3.one;
+
+            var wrapper = (VRCScaleConstraintWrapper)AllConstraint.FromComponent(raw);
+            wrapper.TargetTransform = null;
+            wrapper.SolveInLocalSpace = false;
+            wrapper.AddSource(worldOrigin, 1f);
+            wrapper.Weight = 1f;
+            wrapper.IsActive = true;
+            wrapper.Locked = true;
         }
 
         private static void BuildUnit(AxisToParameter component, Plan plan, Unit unit, Transform container, Transform worldAnchor, int globalIndex)

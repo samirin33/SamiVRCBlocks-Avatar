@@ -833,7 +833,7 @@ namespace Samirin33.NDMF.Components.Editor
                 : parentIsRoot.boolValue ? "ルート" : BoneLabel(parentBone);
             var keepLocalContent = new GUIContent(
                 "ローカルを保持",
-                "オンのとき、付け替え前のワールド位置・回転・スケールを維持します。Armature のスケールが 1 でないモデルでも子が原点に潰れません。オフのとき、childParent との間にローカル座標を打ち消すオブジェクトを挟み、合成結果を位置 0、回転 0、スケール 1 にします。親のスケールが付け替え前と違うときは、オリジナルのスケールへ補正します。");
+                "オンのとき、付け替え前のワールド位置・回転・スケールを維持します。Armature のスケールが 1 でないモデルでも子が原点に潰れません。オフのとき、childParent との間にローカル座標を打ち消すオブジェクトを挟み、合成結果を位置 0、回転 0、スケール 1 にします。親やボーンのスケールが 1 でなくても、生成元の見た目の大きさは保持します。");
 
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
 

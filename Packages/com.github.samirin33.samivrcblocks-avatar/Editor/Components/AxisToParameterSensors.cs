@@ -3,13 +3,17 @@ using System.Linq;
 using UnityEngine;
 using VRC.Dynamics;
 using VRC.SDK3.Dynamics.Contact.Components;
+#if SAMIVRCBLOCKS_VRCSDK_CONTACT_ADVANCED_PARAMS
+using AdvancedParameter = VRC.Dynamics.ContactReceiver.AdvancedParameter;
+#endif
 
 namespace Samirin33.NDMF.Components.Editor
 {
     /// <summary>
     /// 計測空間での Sender の座標 1 成分を表す Animator パラメーター。
-    /// Scale * 値 + Offset が座標 / OrbitRadius（±1 程度）になるようにする。
-    /// 角度は成分の比だけで決まるので倍率が多少ずれても構わないが、すべての成分で共通でなければならない。
+    /// Scale * 値 + Offset が、コンポーネントのロスティスケールが 1 のときの座標 / OrbitRadius（±1 程度）になるようにする。
+    /// 角度は成分の比だけで決まるので、コンポーネントスケールで振幅が変わっても向きが同じなら結果は変わらない。
+    /// すべての成分で Scale / Offset は共通でなければならない。
     /// </summary>
     public readonly struct AxisSensorChannel
     {
@@ -41,6 +45,12 @@ namespace Samirin33.NDMF.Components.Editor
 
         /// <summary>Sender の向きを計測空間に揃える Constraint が要るか。</summary>
         public abstract bool RequiresAlignedSender { get; }
+
+        /// <summary>
+        /// 計測値が負にもなり Direct 重みに不向きなとき（SenderLocalPosition など）。
+        /// 1D の blendParameter で P/Q を書き、角度復元は次レイヤーで読む。
+        /// </summary>
+        public virtual bool IsolateLinearParameterWrites => false;
 
         /// <param name="parameterPrefix">リグごとに一意なパラメーター名の接頭辞。</param>
         /// <param name="axis">計測空間の成分（0: X, 1: Y, 2: Z）。</param>
@@ -129,11 +139,105 @@ namespace Samirin33.NDMF.Components.Editor
         }
     }
 
+    /// <summary>
+    /// SDK 3.10.6+ の Advanced Parameters（SenderLocalPosition）で、Receiver 1 つから X/Y/Z を読む。
+    /// Contact の Parameter 接頭辞に対し {prefix}_SenderLocalPositionX/Y/Z が生成される。
+    /// 値は Receiver から見た相対位置（メートル）。生成リグ親を World スケール固定するため振幅は約 ±OrbitRadius。
+    /// Scale = 1/OrbitRadius・Offset = 0 で正規化する。
+    /// Advanced Parameters の AAP は 1D blendParameter と別レイヤーで書く。
+    /// Sender の中点を使うため向き合わせ Constraint は不要。
+    /// </summary>
+    public sealed class SenderLocalPositionAxisSensor : AxisSensor
+    {
+        public const float SenderRadius = 0.005f;
+
+#if SAMIVRCBLOCKS_VRCSDK_CONTACT_ADVANCED_PARAMS
+        private static readonly string[] AxisSuffixes =
+        {
+            ContactReceiver.PARAM_SENDER_LOCAL_POSITION_X,
+            ContactReceiver.PARAM_SENDER_LOCAL_POSITION_Y,
+            ContactReceiver.PARAM_SENDER_LOCAL_POSITION_Z,
+        };
+#else
+        private static readonly string[] AxisSuffixes =
+        {
+            "_SenderLocalPositionX",
+            "_SenderLocalPositionY",
+            "_SenderLocalPositionZ",
+        };
+#endif
+
+        public override string DisplayName =>
+            "Contact Advanced Parameters の SenderLocalPosition（Receiver 1 つ / SDK 3.10.6+）";
+
+#if SAMIVRCBLOCKS_VRCSDK_CONTACT_ADVANCED_PARAMS
+        public override bool IsSupported => true;
+#else
+        public override bool IsSupported => false;
+#endif
+
+        public override bool RequiresAlignedSender => false;
+
+        public override bool IsolateLinearParameterWrites => true;
+
+        public static string ParameterName(string parameterPrefix, int axis) =>
+            parameterPrefix + AxisSuffixes[axis];
+
+        public override AxisSensorChannel GetChannel(string parameterPrefix, int axis)
+        {
+            return new AxisSensorChannel(
+                ParameterName(parameterPrefix, axis),
+                1f / AxisToParameterProcessor.OrbitRadius,
+                0f);
+        }
+
+        public override int CountReceivers(bool[] channels) => channels.Any(c => c) ? 1 : 0;
+
+        public override void ConfigureSender(VRCContactSender sender)
+        {
+            sender.shapeType = ContactBase.ShapeType.Sphere;
+            sender.radius = SenderRadius;
+            sender.position = Vector3.zero;
+            sender.rotation = Quaternion.identity;
+        }
+
+        public override IEnumerable<VRCContactReceiver> CreateReceivers(
+            Transform root, string parameterPrefix, bool[] channels, string collisionTag, bool localOnly, bool enabled)
+        {
+#if !SAMIVRCBLOCKS_VRCSDK_CONTACT_ADVANCED_PARAMS
+            return Enumerable.Empty<VRCContactReceiver>();
+#else
+            if (!channels.Any(c => c))
+                return Enumerable.Empty<VRCContactReceiver>();
+
+            var child = new GameObject("Receiver_SenderLocalPosition").transform;
+            child.SetParent(root, false);
+            var receiver = child.gameObject.AddComponent<VRCContactReceiver>();
+            receiver.shapeType = ContactBase.ShapeType.Sphere;
+            // 軌道上の Sender を常に内包する
+            receiver.radius = AxisToParameterProcessor.OrbitRadius * 1.1f + SenderRadius;
+            receiver.position = Vector3.zero;
+            receiver.rotation = Quaternion.identity;
+            receiver.localOnly = localOnly;
+            receiver.collisionTags = new List<string> { collisionTag };
+            receiver.allowSelf = true;
+            receiver.allowOthers = false;
+            receiver.receiverType = ContactReceiver.ReceiverType.Proximity;
+            // 接頭辞。実パラメーターは {parameter}_SenderLocalPositionX/Y/Z
+            receiver.parameter = parameterPrefix;
+            receiver.advancedParameters = AdvancedParameter.SenderLocalPosition;
+            receiver.enabled = enabled;
+            return new[] { receiver };
+#endif
+        }
+    }
+
     public static class AxisSensors
     {
         /// <summary>優先順。先頭から IsSupported のものを使う。</summary>
         private static readonly AxisSensor[] Candidates =
         {
+            new SenderLocalPositionAxisSensor(),
             new BoxProximityAxisSensor(),
         };
 
